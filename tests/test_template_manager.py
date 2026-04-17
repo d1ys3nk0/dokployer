@@ -27,15 +27,12 @@ def test_interpolate_replaces_dollar_dollar_var(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MY_VAR", "hello")
-    assert (
-        TemplateManager().interpolate("prefix $${MY_VAR} suffix") == "prefix hello suffix"
-    )
+    assert TemplateManager().interpolate("prefix $${MY_VAR} suffix") == "prefix hello suffix"
 
 
 def test_interpolate_leaves_dokploy_double_brace_with_dot() -> None:
     assert (
-        TemplateManager().interpolate("${{environment.LOG_LEVEL}}")
-        == "${{environment.LOG_LEVEL}}"
+        TemplateManager().interpolate("${{environment.LOG_LEVEL}}") == "${{environment.LOG_LEVEL}}"
     )
 
 
