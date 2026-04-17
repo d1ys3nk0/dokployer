@@ -1,0 +1,90 @@
+[project]
+name = "dokployer"
+version = "0.1.0"
+description = "Deploy interpolated Docker Swarm stacks to Dokploy."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+authors = [
+    { name = "d1ys3nk0" },
+]
+keywords = ["docker", "dokploy", "deploy", "swarm", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/d1ys3nk0/dokployer"
+Repository = "https://github.com/d1ys3nk0/dokployer"
+Issues = "https://github.com/d1ys3nk0/dokployer/issues"
+
+[project.scripts]
+dokployer = "dokployer.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.2.0",
+    "pytest>=8.4.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.12.0",
+    "ty>=0.0.1a19",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",  # handled by the formatter
+    "D203",    # incompatible with D211
+    "D213",    # incompatible with D212
+    "ISC001",  # handled by the formatter
+    "INP001",  # PEP 420 namespace package layout is intentional
+    "S310",    # user-provided Dokploy URL is the tool's purpose
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "D",
+    "PLR2004",
+    "S101",
+    "SLF001",
+    "TC002",
+]
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.pytest.ini_options]
+addopts = "-q --tb=short --strict-config --strict-markers --maxfail=1"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dokployer"]
