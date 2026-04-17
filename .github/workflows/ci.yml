@@ -39,7 +39,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check (mypy)
-        run: cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+        run: cd src && uv run mypy dokployer --config-file ../mypy.ini --explicit-package-bases
 
       - name: Tests
         run: uv run pytest --cov=src --cov-fail-under=90
