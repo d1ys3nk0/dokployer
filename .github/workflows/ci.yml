@@ -13,13 +13,17 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -34,11 +38,11 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
-      - name: Type check (ty)
-        run: uv run ty check .
+      - name: Type check (mypy)
+        run: cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
 
       - name: Tests
-        run: uv run pytest
+        run: uv run pytest --cov=src --cov-fail-under=90
 
       - name: Build package
         run: uv build

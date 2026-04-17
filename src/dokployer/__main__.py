@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from dokployer.cli import cli
+from dokployer.cli import main
 
-raise SystemExit(cli())
+raise SystemExit(main())

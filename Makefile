@@ -22,13 +22,13 @@ lint: ## Run Ruff lint checks
 	uv run ruff check .
 
 typecheck: ## Run type checks
-	uv run ty check .
+	cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
 
 test: ## Run tests
 	uv run pytest
 
 test-cov: ## Run tests with coverage
-	uv run pytest --cov=src --cov-report=term-missing
+	uv run pytest --cov=src --cov-fail-under=90 --cov-report=term-missing
 
 build: ## Build Python package artifacts
 	uv build
@@ -36,8 +36,8 @@ build: ## Build Python package artifacts
 check: ## Run all project checks
 	uv run ruff check .
 	uv run ruff format --check .
-	uv run ty check .
-	uv run pytest
+	cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+	uv run pytest --cov=src --cov-fail-under=90
 
 docker-build: ## Build the Docker image locally
 	docker build -t dokployer .

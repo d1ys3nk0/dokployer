@@ -7,9 +7,9 @@ repos:
 
   - repo: local
     hooks:
-      - id: ty-check
-        name: ty check
-        entry: uv run ty check .
+      - id: mypy-check
+        name: mypy check
+        entry: bash -c "cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases"
         language: system
         pass_filenames: false
         types: [python]

@@ -3,7 +3,7 @@ name = "dokployer"
 version = "0.1.0"
 description = "Deploy interpolated Docker Swarm stacks to Dokploy."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
     { name = "d1ys3nk0" },
@@ -16,6 +16,8 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Build Tools",
     "Topic :: System :: Systems Administration",
@@ -28,7 +30,7 @@ Repository = "https://github.com/d1ys3nk0/dokployer"
 Issues = "https://github.com/d1ys3nk0/dokployer/issues"
 
 [project.scripts]
-dokployer = "dokployer.cli:cli"
+dokployer = "dokployer.cli:main"
 
 [dependency-groups]
 dev = [
@@ -36,7 +38,7 @@ dev = [
     "pytest>=8.4.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.12.0",
-    "ty>=0.0.1a19",
+    "mypy>=1.11",
 ]
 
 [tool.uv]
@@ -44,17 +46,17 @@ default-groups = ["dev"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-    "COM812",  # handled by the formatter
-    "D203",    # incompatible with D211
-    "D213",    # incompatible with D212
-    "ISC001",  # handled by the formatter
-    "INP001",  # PEP 420 namespace package layout is intentional
-    "S310",    # user-provided Dokploy URL is the tool's purpose
+    "COM812",
+    "D203",
+    "D213",
+    "ISC001",
+    "INP001",
+    "S310",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -66,12 +68,34 @@ ignore = [
     "TC002",
 ]
 
-[tool.ty.environment]
-python-version = "3.13"
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+strict_concatenate = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-q --tb=short --strict-config --strict-markers --maxfail=1"
 testpaths = ["tests"]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+]
 
 [tool.coverage.run]
 source = ["src"]
@@ -88,3 +112,4 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dokployer"]
+include = ["src/dokployer/py.typed"]

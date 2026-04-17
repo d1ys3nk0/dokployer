@@ -1,303 +1,250 @@
-"""Tests for DokployClient."""
+"""Tests for DokployClient transport layer."""
 
 from __future__ import annotations
 
-import io
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pathlib import Path
+import json
+import urllib.error
+from typing import Self
+from unittest.mock import MagicMock
 
 import pytest
 
-import dokployer.dokploy_client as dpc
-import dokployer.template_manager as tm_mod
 from dokployer.dokploy_client import DokployClient
-from dokployer.template_manager import TemplateManager
+from dokployer.errors import DokployAPIError
 
 
-class _FakeStdin(io.StringIO):
-    def __init__(self, value: str, *, is_tty: bool) -> None:
-        super().__init__(value)
-        self._is_tty = is_tty
+class MockResponse:
+    """Mock response that works as a context manager for urllib."""
 
-    def isatty(self) -> bool:
-        return self._is_tty
+    def __init__(self, data: bytes) -> None:
+        self._data = data
 
+    def read(self) -> bytes:
+        return self._data
 
-def test_compose_id_for_stack_found() -> None:
-    payload: dict[str, object] = {
-        "compose": [{"name": "my-stack", "composeId": "abc123"}],
-    }
-    assert DokployClient._compose_id_for_stack(payload, "my-stack") == "abc123"
+    def __enter__(self) -> Self:
+        return self
 
-
-def test_compose_id_for_stack_not_found() -> None:
-    payload: dict[str, object] = {"compose": [{"name": "other", "composeId": "xyz"}]}
-    assert DokployClient._compose_id_for_stack(payload, "my-stack") == ""
+    def __exit__(self, *args: object) -> None:
+        pass
 
 
-def test_compose_id_for_stack_empty_list() -> None:
-    assert DokployClient._compose_id_for_stack({"compose": []}, "x") == ""
+class TestDokployClientTransport:
+    """Tests for DokployClient HTTP transport methods."""
 
+    def test_client_stores_init_params(self) -> None:
+        client = DokployClient(base_url="http://localhost:8080", api_key="secret", timeout=60)
+        assert client.base_url == "http://localhost:8080"
+        assert client.api_key == "secret"
+        assert client.timeout == 60
 
-def test_check_api_error_silent_on_success() -> None:
-    DokployClient(TemplateManager())._check_api_error("label", '{"result": "ok"}')
+    def test_client_uses_env_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://env:9999")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "env-key")
+        client = DokployClient()
+        assert client.base_url == "http://env:9999"
+        assert client.api_key == "env-key"
 
+    def test_required_env_raises_when_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        client = DokployClient()
+        with pytest.raises(DokployAPIError) as exc_info:
+            client._required_env("MISSING_VAR")
+        assert "missing required environment variable: MISSING_VAR" in str(exc_info.value)
 
-def test_check_api_error_silent_on_non_json() -> None:
-    DokployClient(TemplateManager())._check_api_error("label", "not json at all")
+    def test_required_env_returns_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MY_VAR", "my-value")
+        client = DokployClient()
+        assert client._required_env("MY_VAR") == "my-value"
 
+    def test_raise_if_api_error_silent_on_non_json(self) -> None:
+        client = DokployClient()
+        client._raise_if_api_error("/test", "not json at all")
 
-def test_check_api_error_exits_on_error_code() -> None:
-    with pytest.raises(SystemExit):
-        DokployClient(TemplateManager())._check_api_error(
-            "label",
-            '{"code": "SOME_ERROR", "message": "boom"}',
+    def test_raise_if_api_error_raises_on_error_code(self) -> None:
+        client = DokployClient()
+        with pytest.raises(DokployAPIError) as exc_info:
+            client._raise_if_api_error(
+                "/test",
+                '{"code": "SOME_ERROR", "message": "boom"}',
+            )
+        assert "SOME_ERROR" in str(exc_info.value)
+        assert "Dokploy API error" in str(exc_info.value)
+
+    def test_request_builds_correct_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key123")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'{"result": "ok"}')
+
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=mock_response))
+
+        client._request("GET", "/api/test")
+
+        call_args = urllib.request.urlopen.call_args
+        req = call_args[0][0]
+        assert req.full_url == "http://test.local/api/test"
+        assert req.method == "GET"
+
+    def test_request_sends_api_key_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "secret-key")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'{"result": "ok"}')
+
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=mock_response))
+
+        client._request("GET", "/api/test")
+
+        call_args = urllib.request.urlopen.call_args
+        req = call_args[0][0]
+        assert req.headers.get("X-api-key") == "secret-key"
+
+    def test_request_raises_dokploy_api_error_on_http_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        def raise_http_error(_req: object, **_kwargs: object) -> MagicMock:
+            err = urllib.error.HTTPError(
+                url="http://test.local/api/missing",
+                code=404,
+                msg="Not Found",
+                hdrs={},
+                fp=None,
+            )
+            raise err
+
+        monkeypatch.setattr("urllib.request.urlopen", raise_http_error)
+
+        with pytest.raises(DokployAPIError) as exc_info:
+            client._request("GET", "/api/missing")
+        assert exc_info.value.status_code == 404
+
+    def test_request_raises_dokploy_api_error_on_network_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        def raise_url_error(_req: object, **_kwargs: object) -> MagicMock:
+            msg = "connection refused"
+            raise urllib.error.URLError(msg)
+
+        monkeypatch.setattr("urllib.request.urlopen", raise_url_error)
+
+        with pytest.raises(DokployAPIError) as exc_info:
+            client._request("GET", "/api/test")
+        assert "connection refused" in str(exc_info.value)
+
+    def test_request_with_body_sends_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'{"ok": true}')
+
+        captured_data: dict[object, object] = {}
+
+        def capture_urlopen(req: object, **_kwargs: object) -> MockResponse:
+            if hasattr(req, "data") and req.data:
+                captured_data["body"] = json.loads(req.data.decode("utf-8"))
+            return mock_response
+
+        monkeypatch.setattr("urllib.request.urlopen", capture_urlopen)
+
+        client._request("POST", "/api/create", body={"name": "test"})
+
+        assert captured_data["body"]["name"] == "test"
+        req = captured_data.get("body", {})
+        assert req.get("name") == "test"
+
+    def test_get_environment_returns_parsed_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'{"compose": []}')
+
+        def capture_urlopen(_req: object, **_kwargs: object) -> MockResponse:
+            return mock_response
+
+        monkeypatch.setattr("urllib.request.urlopen", capture_urlopen)
+
+        result = client.get_environment("env-001")
+
+        assert result == {"compose": []}
+
+    def test_create_compose_returns_parsed_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'{"composeId": "cmp-123"}')
+
+        def capture_urlopen(_req: object, **_kwargs: object) -> MockResponse:
+            return mock_response
+
+        monkeypatch.setattr("urllib.request.urlopen", capture_urlopen)
+
+        result = client.create_compose(name="my-stack", environment_id="env-001")
+
+        assert result == {"composeId": "cmp-123"}
+
+    def test_update_compose_sends_correct_body(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'{"ok": true}')
+
+        captured_data: dict[object, object] = {}
+
+        def capture_urlopen(req: object, **_kwargs: object) -> MockResponse:
+            if hasattr(req, "data") and req.data:
+                captured_data["body"] = json.loads(req.data.decode("utf-8"))
+            return mock_response
+
+        monkeypatch.setattr("urllib.request.urlopen", capture_urlopen)
+
+        client.update_compose(
+            compose_id="cmp-123",
+            compose_file="version: '3'\nservices:\n  app:\n    image: test\n",
+            env_content="FOO=bar\n",
         )
 
+        assert captured_data["body"]["composeId"] == "cmp-123"
+        assert "version: '3'" in captured_data["body"]["composeFile"]
+        assert captured_data["body"]["env"] == "FOO=bar\n"
 
-def test_deploy_stack_happy_path_existing_stack(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    compose_tmpl = tmp_path / "my-stack.stack.yml"
-    compose_tmpl.write_text(
-        "version: '3'\nservices:\n  app:\n    image: $${DEPLOY_IMAGE}\n",
-        encoding="utf-8",
-    )
+    def test_get_compose_status_returns_status_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-    compose_id = "cmp-001"
-    responses = iter(
-        [
-            {"compose": [{"name": "my-stack", "composeId": compose_id}]},
-            {"composeId": compose_id},
-            {"status": "queued"},
-        ],
-    )
-    monkeypatch.setattr(
-        DokployClient,
-        "_api",
-        lambda _c, _m, _p, _body=None: next(responses),
-    )
+        client = DokployClient()
 
-    monkeypatch.setenv("DOKPLOY_URL", "http://dokploy.test")
-    monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
-    monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-    monkeypatch.setenv("DEPLOY_IMAGE", "myimage:latest")
+        mock_response = MockResponse(b'{"composeStatus": "running"}')
 
-    DokployClient(TemplateManager()).deploy_stack("my-stack", compose_tmpl)
+        def capture_urlopen(_req: object, **_kwargs: object) -> MockResponse:
+            return mock_response
 
+        monkeypatch.setattr("urllib.request.urlopen", capture_urlopen)
 
-def test_deploy_stack_with_env_file(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    compose_tmpl = tmp_path / "my-stack.stack.yml"
-    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+        status = client.get_compose_status("cmp-123")
 
-    env_tmpl = tmp_path / "prd.env"
-    env_tmpl.write_text(
-        "LOG_LEVEL=${{environment.LOG_LEVEL}}\nDEPLOY_IMAGE=$${DEPLOY_IMAGE}\n",
-        encoding="utf-8",
-    )
-
-    compose_id = "cmp-001"
-    update_payloads: list[dict[str, Any]] = []
-
-    def fake_api(
-        _self: DokployClient,
-        method: str,
-        path: str,
-        body: dict[str, str] | None = None,
-    ) -> dict[str, object]:
-        if (method, path) == ("GET", "/api/environment.one?environmentId=env-001"):
-            return {"compose": [{"name": "my-stack", "composeId": compose_id}]}
-        if (method, path) == ("POST", "/api/compose.update"):
-            if body is None:
-                msg = "compose.update must receive a body"
-                raise AssertionError(msg)
-            update_payloads.append(body)
-            return {"composeId": compose_id}
-        if (method, path) == ("POST", "/api/compose.deploy"):
-            return {"status": "queued"}
-        msg = f"unexpected API call: {method} {path}"
-        raise AssertionError(msg)
-
-    monkeypatch.setattr(DokployClient, "_api", fake_api)
-    monkeypatch.setenv("DOKPLOY_URL", "http://dokploy.test")
-    monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
-    monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-    monkeypatch.setenv("DEPLOY_IMAGE", "myimage:latest")
-
-    DokployClient(TemplateManager()).deploy_stack("my-stack", compose_tmpl, env_file=env_tmpl)
-
-    assert update_payloads[0]["env"] == (
-        "LOG_LEVEL=${{environment.LOG_LEVEL}}\nDEPLOY_IMAGE=myimage:latest\n"
-    )
-
-
-def test_deploy_stack_happy_path_creates_new_stack(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    compose_tmpl = tmp_path / "new-stack.stack.yml"
-    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
-
-    compose_id = "cmp-new"
-    responses = iter(
-        [
-            {"compose": []},
-            {"composeId": compose_id},
-            {"composeId": compose_id},
-            {"status": "queued"},
-        ],
-    )
-    monkeypatch.setattr(
-        DokployClient,
-        "_api",
-        lambda _c, _m, _p, _body=None: next(responses),
-    )
-
-    monkeypatch.setenv("DOKPLOY_URL", "http://dokploy.test")
-    monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
-    monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-
-    DokployClient(TemplateManager()).deploy_stack("new-stack", compose_tmpl)
-
-
-def test_deploy_stack_reads_compose_template_from_stdin(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    compose_id = "cmp-001"
-    update_payloads: list[dict[str, str]] = []
-
-    def fake_api(
-        _self: DokployClient,
-        method: str,
-        path: str,
-        body: dict[str, str] | None = None,
-    ) -> dict[str, object]:
-        if (method, path) == ("GET", "/api/environment.one?environmentId=env-001"):
-            return {"compose": [{"name": "my-stack", "composeId": compose_id}]}
-        if (method, path) == ("POST", "/api/compose.update"):
-            if body is None:
-                msg = "compose.update must receive a body"
-                raise AssertionError(msg)
-            update_payloads.append(body)
-            return {"composeId": compose_id}
-        if (method, path) == ("POST", "/api/compose.deploy"):
-            return {"status": "queued"}
-        msg = f"unexpected API call: {method} {path}"
-        raise AssertionError(msg)
-
-    monkeypatch.setattr(DokployClient, "_api", fake_api)
-    monkeypatch.setattr(
-        tm_mod.sys,
-        "stdin",
-        _FakeStdin(
-            "version: '3'\nservices:\n  app:\n    image: $${DEPLOY_IMAGE}\n",
-            is_tty=False,
-        ),
-    )
-
-    monkeypatch.setenv("DOKPLOY_URL", "http://dokploy.test")
-    monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
-    monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-    monkeypatch.setenv("DEPLOY_IMAGE", "myimage:latest")
-
-    DokployClient(TemplateManager()).deploy_stack("my-stack")
-
-    assert update_payloads[0]["composeFile"] == (
-        "version: '3'\nservices:\n  app:\n    image: myimage:latest\n"
-    )
-    assert "env" not in update_payloads[0]
-
-
-def test_deploy_stack_wait_polls_until_done(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    compose_tmpl = tmp_path / "my-stack.stack.yml"
-    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
-
-    compose_id = "cmp-001"
-    responses = iter(
-        [
-            {"compose": [{"name": "my-stack", "composeId": compose_id}]},
-            {"composeId": compose_id},
-            {"status": "queued"},
-            {"composeStatus": "running"},
-            {"composeStatus": "done"},
-        ],
-    )
-    monkeypatch.setattr(
-        DokployClient,
-        "_api",
-        lambda _c, _m, _p, _body=None: next(responses),
-    )
-
-    sleep_calls: list[int] = []
-    monotonic_values = iter([0, 0, 5, 10])
-
-    def fake_sleep(seconds: int) -> None:
-        sleep_calls.append(seconds)
-
-    monkeypatch.setattr(dpc.time, "sleep", fake_sleep)
-    monkeypatch.setattr(dpc.time, "monotonic", lambda: next(monotonic_values))
-    monkeypatch.setenv("DOKPLOY_URL", "http://dokploy.test")
-    monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
-    monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-
-    DokployClient(TemplateManager()).deploy_stack("my-stack", compose_tmpl, wait=True)
-
-    assert sleep_calls == [5, 5]
-
-
-def test_deploy_stack_wait_times_out(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    compose_tmpl = tmp_path / "my-stack.stack.yml"
-    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
-
-    compose_id = "cmp-001"
-
-    def fake_api(
-        _self: DokployClient,
-        method: str,
-        path: str,
-        body: dict[str, str] | None = None,
-    ) -> dict[str, object]:
-        response_map: dict[tuple[str, str], dict[str, object]] = {
-            ("GET", "/api/environment.one?environmentId=env-001"): {
-                "compose": [{"name": "my-stack", "composeId": compose_id}],
-            },
-            ("GET", f"/api/compose.one?composeId={compose_id}"): {
-                "composeStatus": "running",
-            },
-            ("POST", "/api/compose.update"): {"composeId": compose_id},
-            ("POST", "/api/compose.deploy"): {"status": "queued"},
-        }
-        _ = body
-        return response_map[(method, path)]
-
-    monkeypatch.setattr(DokployClient, "_api", fake_api)
-
-    sleep_calls: list[int] = []
-    monotonic_values = iter([0, 0, 5, 10])
-
-    def fake_sleep(seconds: int) -> None:
-        sleep_calls.append(seconds)
-
-    monkeypatch.setattr(dpc.time, "sleep", fake_sleep)
-    monkeypatch.setattr(dpc.time, "monotonic", lambda: next(monotonic_values))
-    monkeypatch.setenv("DOKPLOY_URL", "http://dokploy.test")
-    monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
-    monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-    monkeypatch.setenv("WAIT_TIMEOUT", "10")
-
-    with pytest.raises(SystemExit):
-        DokployClient(TemplateManager()).deploy_stack("my-stack", compose_tmpl, wait=True)
-
-    assert sleep_calls == [5, 5]
+        assert status == "running"
