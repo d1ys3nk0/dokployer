@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-make setup
+task setup
 ```
 
 ## Before Opening a Pull Request
@@ -11,19 +11,19 @@ make setup
 Run the full local check suite:
 
 ```bash
-make check
+task check
 ```
 
 Build the package artifacts:
 
 ```bash
-make build
+task build
 ```
 
 Optionally validate the image locally:
 
 ```bash
-make docker-build
+task docker-build
 ```
 
 ## Development Notes

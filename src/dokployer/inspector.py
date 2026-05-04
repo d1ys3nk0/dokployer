@@ -77,7 +77,7 @@ class DokployInspector:
             msg = "missing app name: pass APP_NAME or set DOKPLOY_APP_NAME"
             raise ConfigurationError(msg)
         if config.environment_id is None:
-            msg = "missing required environment variable: DOKPLOY_ENV_ID or DOKPLOY_ENVIRONMENT_ID"
+            msg = "missing required environment variable: DOKPLOY_ENV_ID"
             raise ConfigurationError(msg)
 
         env_data = self._client.get_environment(config.environment_id)

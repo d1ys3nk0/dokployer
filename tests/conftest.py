@@ -12,10 +12,11 @@ def clear_dokploy_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DOKPLOY_URL",
         "DOKPLOY_API_KEY",
         "DOKPLOY_ENV_ID",
-        "DOKPLOY_ENVIRONMENT_ID",
         "DOKPLOY_APP_NAME",
-        "DOKPLOY_APP",
         "DOKPLOY_APP_ID",
-        "DOKPLOY_SERVICE_ID",
+        "DEPLOY_POLL_INTERVAL",
+        "DEPLOY_POLL_TIMEOUT",
+        "STACK_POLL_INTERVAL",
+        "STACK_POLL_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)

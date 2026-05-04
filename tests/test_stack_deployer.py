@@ -96,7 +96,7 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.delenv("DOKPLOY_URL", raising=False)
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -110,7 +110,7 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.delenv("DOKPLOY_API_KEY", raising=False)
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -124,7 +124,7 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.delenv("DOKPLOY_ENVIRONMENT_ID", raising=False)
+        monkeypatch.delenv("DOKPLOY_ENV_ID", raising=False)
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -135,14 +135,14 @@ class TestStackDeployerWorkflow:
 
         with pytest.raises(ConfigurationError) as exc_info:
             deployer.deploy("my-stack", template_path=compose_tmpl)
-        assert "DOKPLOY_ENVIRONMENT_ID" in str(exc_info.value)
+        assert "DOKPLOY_ENV_ID" in str(exc_info.value)
 
     def test_deploy_raises_configuration_error_when_env_file_not_found(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -162,9 +162,10 @@ class TestStackDeployerWorkflow:
     def test_deploy_uses_existing_compose_id(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        _fast_wait_clock(monkeypatch)
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
         monkeypatch.setenv("MY_VAR", "test-value")
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -192,9 +193,10 @@ class TestStackDeployerWorkflow:
     def test_deploy_creates_new_compose_when_not_found(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        _fast_wait_clock(monkeypatch)
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
         monkeypatch.setenv("MY_VAR", "test-value")
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -225,6 +227,7 @@ class TestStackDeployerWorkflow:
     def test_deploy_uses_canonical_env_id(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        _fast_wait_clock(monkeypatch)
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
         monkeypatch.setenv("DOKPLOY_ENV_ID", "env-new")
@@ -251,9 +254,9 @@ class TestStackDeployerWorkflow:
     def test_deploy_uses_app_id_without_environment_lookup(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        _fast_wait_clock(monkeypatch)
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.delenv("DOKPLOY_ENVIRONMENT_ID", raising=False)
         monkeypatch.delenv("DOKPLOY_ENV_ID", raising=False)
         monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
 
@@ -277,6 +280,7 @@ class TestStackDeployerWorkflow:
     def test_deploy_allows_app_id_without_app_name(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        _fast_wait_clock(monkeypatch)
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
         monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
@@ -299,9 +303,10 @@ class TestStackDeployerWorkflow:
     def test_deploy_calls_deploy_compose(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        _fast_wait_clock(monkeypatch)
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
         monkeypatch.setenv("MY_VAR", "test-value")
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -326,9 +331,10 @@ class TestStackDeployerWorkflow:
     def test_deploy_interpolates_template(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        _fast_wait_clock(monkeypatch)
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
         monkeypatch.setenv("DEPLOY_IMAGE", "myimage:latest")
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -357,9 +363,9 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -388,9 +394,9 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -429,9 +435,9 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "2")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "2")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -456,9 +462,41 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        client.get_compose_status.side_effect = ["running", "done"]
+        client.get_deployments_by_compose.side_effect = [
+            [],
+            [{"deploymentId": "dep-001", "status": "running"}],
+            [{"deploymentId": "dep-001", "status": "done"}],
+        ]
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy("my-stack", template_path=compose_tmpl)
+
+    def test_wait_ignores_removed_wait_env_names(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("WAIT_TIMEOUT", "foo")
+        monkeypatch.setenv("WAIT_INTERVAL", "foo")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -486,9 +524,9 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -513,7 +551,15 @@ class TestStackDeployerWorkflow:
 
         assert client.get_compose_status.call_count == 2
 
-    @pytest.mark.parametrize("name", ["WAIT_TIMEOUT", "WAIT_INTERVAL"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "DEPLOY_POLL_TIMEOUT",
+            "DEPLOY_POLL_INTERVAL",
+            "STACK_POLL_TIMEOUT",
+            "STACK_POLL_INTERVAL",
+        ],
+    )
     @pytest.mark.parametrize("value", ["foo", "0"])
     def test_wait_rejects_invalid_wait_env(
         self,
@@ -524,24 +570,27 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
         monkeypatch.setenv(name, value)
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
-        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+        compose_tmpl.write_text(
+            "version: '3'\nservices:\n  app:\n    image: app:latest\n",
+            encoding="utf-8",
+        )
 
         client = MagicMock()
         client.get_environment.return_value = {
             "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
         }
-        client.get_deployments_by_compose.return_value = []
+        _successful_deploy_status(client)
 
         template = ComposeTemplate()
         deployer = _deployer(client, template)
 
         with pytest.raises(ConfigurationError) as exc_info:
-            deployer.deploy("my-stack", template_path=compose_tmpl)
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
 
         assert name in str(exc_info.value)
 
@@ -550,9 +599,9 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -584,9 +633,11 @@ class TestStackDeployerWorkflow:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_TIMEOUT", "300")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -633,14 +684,55 @@ services:
 
         client.get_stack_containers_by_app_name.assert_called_once_with("my-stack")
 
+    def test_container_wait_uses_stack_poll_timeout_for_bare_wait(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_TIMEOUT", "2")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text(
+            "version: '3'\nservices:\n  app:\n    image: new:latest\n",
+            encoding="utf-8",
+        )
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        _successful_deploy_status(client)
+        client.get_stack_containers_by_app_name.return_value = [
+            {"containerId": "ctr-1", "name": "my-stack_app.1.abc"}
+        ]
+        client.get_container_config.return_value = {
+            "State": {"Status": "running"},
+            "Config": {"Image": "old:latest"},
+        }
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with pytest.raises(DeployTimeoutError) as exc_info:
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
+
+        assert "container readiness timed out after 2s" in str(exc_info.value)
+
     def test_container_wait_times_out_on_stale_image(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_TIMEOUT", "300")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -669,7 +761,7 @@ services:
             deployer.deploy("my-stack", template_path=compose_tmpl, wait=2)
 
         message = str(exc_info.value)
-        assert "container readiness timed out" in message
+        assert "container readiness timed out after 2s" in message
         assert "image=old:latest" in message
 
     def test_container_wait_requires_service_image(
@@ -677,7 +769,7 @@ services:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\nservices:\n  app: {}\n", encoding="utf-8")
@@ -697,7 +789,7 @@ services:
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
-        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text(
@@ -726,8 +818,9 @@ services:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
         monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
@@ -761,8 +854,9 @@ services:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
         monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
-        monkeypatch.setenv("WAIT_TIMEOUT", "10")
-        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
         _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"

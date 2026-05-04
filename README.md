@@ -39,28 +39,23 @@ App targeting:
 - `DOKPLOY_ENV_ID` + `DOKPLOY_APP_NAME`
   - Used to resolve the app by name when `DOKPLOY_APP_ID` is not set.
 
-Compatibility aliases:
-
-- `DOKPLOY_ENVIRONMENT_ID` for `DOKPLOY_ENV_ID`
-- `DOKPLOY_APP` for `DOKPLOY_APP_NAME`
-- `DOKPLOY_SERVICE_ID` for `DOKPLOY_APP_ID`
-
-If a canonical variable and its compatibility alias are both set to different
-values, `dokployer` fails with a configuration error.
-
 Optional runtime variables:
 
-- `WAIT_TIMEOUT`
-  - Max seconds to wait for Dokploy deploy status. Default: `300`.
-- `WAIT_INTERVAL`
-  - Polling interval in seconds for deploy and container readiness checks.
-    Default: `5`.
+- `DEPLOY_POLL_INTERVAL`
+  - Polling interval in seconds for Dokploy deploy status. Default: `5`.
+- `DEPLOY_POLL_TIMEOUT`
+  - Max seconds to wait for Dokploy deploy status. Default: `60`.
+- `STACK_POLL_INTERVAL`
+  - Polling interval in seconds for stack container readiness checks. Default:
+    `5`.
+- `STACK_POLL_TIMEOUT`
+  - Max seconds to wait for stack container readiness checks. Default: `300`.
 
 `--wait` optionally enables container readiness checks after Dokploy reports the
 deploy as `done`:
 
 - `--wait`
-  - Waits up to `60` seconds.
+  - Waits up to `STACK_POLL_TIMEOUT` seconds.
 - `--wait 300`
   - Waits up to `300` seconds.
 
@@ -98,12 +93,6 @@ uv sync
 Run from the workspace:
 
 ```bash
-uv run dokployer stack-name -f path/to/stack.yml --env path/to/dokploy.env --wait
-```
-
-Canonical deploy form:
-
-```bash
 uv run dokployer deploy app-name -f path/to/stack.yml --env path/to/dokploy.env --wait
 ```
 
@@ -111,13 +100,13 @@ Or install the package and run it directly:
 
 ```bash
 uv tool install .
-dokployer stack-name -f path/to/stack.yml --env path/to/dokploy.env --wait
+dokployer deploy app-name -f path/to/stack.yml --env path/to/dokploy.env --wait
 ```
 
 You can also pipe the stack YAML through stdin:
 
 ```bash
-cat path/to/stack.yml | uv run dokployer stack-name --env path/to/dokploy.env --wait
+cat path/to/stack.yml | uv run dokployer deploy app-name --env path/to/dokploy.env --wait
 ```
 
 Read-only API inspection:
@@ -155,7 +144,7 @@ docker run --rm -i \
   -v "$PWD:$PWD" \
   -w "$PWD" \
   ghcr.io/d1ys3nk0/dokployer:latest \
-  dokployer stack-name -f path-to-swarm-stack.yml --env path/to/dotenv --wait
+  dokployer deploy app-name -f path-to-swarm-stack.yml --env path/to/dotenv --wait
 ```
 
 Important:
@@ -185,11 +174,11 @@ Because the image does not override the container entrypoint, CI shells can run
 Useful commands:
 
 ```bash
-make setup
-make fmt
-make check
-make build
-make docker-build
+task setup
+task fmt
+task check
+task build
+task docker-build
 ```
 
 ## License

@@ -1,0 +1,86 @@
+---
+
+version: '3'
+
+vars:
+  PYTHON_VERSION: '3.14'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  setup:
+    desc: Install dependencies and git hooks
+    cmds:
+      - task: deps
+      - task: hooks
+
+  deps:
+    desc: Install dependencies
+    cmds:
+      - uv sync
+
+  deps-up:
+    desc: Upgrade dependencies
+    cmds:
+      - uv sync --upgrade
+
+  hooks:
+    desc: Install git hooks
+    cmds:
+      - uv run pre-commit install
+
+  fmt:
+    desc: Format source files
+    cmds:
+      - uv run ruff format .
+
+  lint:
+    desc: Run Ruff lint checks
+    cmds:
+      - uv run ruff check .
+
+  typecheck:
+    desc: Run type checks
+    cmds:
+      - cd src && uv run python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+
+  test:
+    desc: Run tests
+    cmds:
+      - uv run python -m pytest
+
+  test-cov:
+    desc: Run tests with coverage
+    cmds:
+      - uv run python -m pytest --cov=src --cov-fail-under=90 --cov-report=term-missing
+
+  build:
+    desc: Build Python package artifacts
+    cmds:
+      - uv build
+
+  check:
+    desc: Run all project checks
+    cmds:
+      - uv run ruff check .
+      - uv run ruff format --check .
+      - cd src && uv run python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+      - uv run python -m pytest --cov=src --cov-fail-under=90
+
+  docker-build:
+    desc: Build the Docker image locally
+    cmds:
+      - docker build -t dokployer .
+
+  docker-run:
+    desc: Show Docker CLI help in the image
+    cmds:
+      - docker run --rm -i dokployer dokployer --help
+
+  clean:
+    desc: Remove caches and build artifacts
+    cmds:
+      - rm -rf .coverage .pytest_cache .ruff_cache .venv .uv-cache build dist htmlcov
+      - find . -type d -name "__pycache__" -prune -exec rm -rf {} +

@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 from dokployer.config import resolve_config
-from dokployer.constants import DEFAULT_CONTAINER_WAIT_TIMEOUT_SECONDS
 from dokployer.dokploy_client import DokployClient
 from dokployer.errors import DokployerError
 from dokployer.inspector import DokployInspector
@@ -82,36 +81,11 @@ def _add_deploy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--wait",
         nargs="?",
-        const=DEFAULT_CONTAINER_WAIT_TIMEOUT_SECONDS,
+        const=True,
         type=_positive_int,
         metavar="SECONDS",
         help="After deploy finishes, wait for containers to run with the expected image.",
     )
-
-
-def _command_index(argv: list[str], command: str) -> int | None:
-    for index, arg in enumerate(argv):
-        if arg == "--":
-            return None
-        if arg.startswith("-"):
-            continue
-        if arg == command:
-            return index
-        return None
-    return None
-
-
-def _legacy_command_name(argv: list[str], command: str, index: int | None) -> bool:
-    if index is None:
-        return False
-    if command == "logs":
-        return len(argv) > 1
-    if command == "deploy":
-        return len(argv) > index + 1 and argv[index + 1].startswith("-")
-    if command == "inspect":
-        inspect_commands = {"app", "services", "containers", "deployments"}
-        return len(argv) <= index + 1 or argv[index + 1] not in inspect_commands
-    return False
 
 
 def _print_json(data: object) -> None:
@@ -218,13 +192,18 @@ def _add_json_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _parse_inspect_args(raw_argv: list[str]) -> argparse.Namespace:
+def _parse_args(raw_argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="dokployer",
-        description="Inspect Dokploy compose apps using the Dokploy API.",
+        description="Deploy and inspect Dokploy compose apps using the Dokploy API.",
     )
     _add_global_args(parser)
+
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    deploy_parser = subparsers.add_parser("deploy")
+    _add_deploy_args(deploy_parser)
+
     inspect_parser = subparsers.add_parser("inspect")
     inspect_subparsers = inspect_parser.add_subparsers(
         dest="inspect_command",
@@ -247,51 +226,11 @@ def _parse_inspect_args(raw_argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(raw_argv)
 
 
-def _parse_deploy_command_args(raw_argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="dokployer",
-        description="Upload an interpolated Docker Swarm stack to Dokploy.",
-    )
-    _add_global_args(parser)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    deploy_parser = subparsers.add_parser("deploy")
-    _add_deploy_args(deploy_parser)
-    return parser.parse_args(raw_argv)
-
-
-def _parse_legacy_deploy_args(raw_argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="dokployer",
-        description="Upload an interpolated Docker Swarm stack to Dokploy.",
-    )
-    _add_global_args(parser)
-    _add_deploy_args(parser)
-    return parser.parse_args(raw_argv)
-
-
 def main(argv: list[str] | None = None) -> int:
     """Parse CLI arguments and run the deployment."""
     raw_argv = sys.argv[1:] if argv is None else argv
-    deploy_index = _command_index(raw_argv, "deploy")
-    inspect_index = _command_index(raw_argv, "inspect")
-    logs_index = _command_index(raw_argv, "logs")
-
-    legacy_deploy_name = _legacy_command_name(raw_argv, "deploy", deploy_index)
-    legacy_inspect_name = _legacy_command_name(raw_argv, "inspect", inspect_index)
-    legacy_logs_name = _legacy_command_name(raw_argv, "logs", logs_index)
-
-    if inspect_index is not None and not legacy_inspect_name:
-        args = _parse_inspect_args(raw_argv)
-        runner = _run_inspect
-    elif deploy_index is not None and not legacy_deploy_name:
-        args = _parse_deploy_command_args(raw_argv)
-        runner = _run_deploy
-    elif logs_index is not None and not legacy_logs_name:
-        sys.stderr.write("dokployer: error: logs command was removed; use Dokploy API data only\n")
-        return 2
-    else:
-        args = _parse_legacy_deploy_args(raw_argv)
-        runner = _run_deploy
+    args = _parse_args(raw_argv)
+    runner = _run_deploy if args.command == "deploy" else _run_inspect
 
     _configure_logging(verbose=args.verbose, quiet=args.quiet)
 

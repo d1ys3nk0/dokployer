@@ -40,6 +40,7 @@ def test_main_parses_arguments(
     with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
         exit_code = cli_mod.main(
             [
+                "deploy",
                 "stack-name",
                 "-f",
                 str(compose_tmpl),
@@ -55,7 +56,7 @@ def test_main_parses_arguments(
     assert call_args.args[0] == "stack-name"
     assert call_args.kwargs["template_path"] == compose_tmpl
     assert call_args.kwargs["env_template_path"] == env_tmpl
-    assert call_args.kwargs["wait"] == 60
+    assert call_args.kwargs["wait"] is True
 
 
 def test_main_returns_zero_on_success(
@@ -68,6 +69,7 @@ def test_main_returns_zero_on_success(
     with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
         exit_code = cli_mod.main(
             [
+                "deploy",
                 "stack-name",
                 "-f",
                 str(compose_tmpl),
@@ -100,7 +102,7 @@ def test_main_parses_canonical_deploy_command(
     call_args = mock_deployer.deploy.call_args
     assert call_args.args[0] == "app-name"
     assert call_args.kwargs["template_path"] == compose_tmpl
-    assert call_args.kwargs["wait"] == 60
+    assert call_args.kwargs["wait"] is True
 
 
 def test_main_parses_wait_timeout(
@@ -185,45 +187,16 @@ def test_main_parses_inspect_deployments_command(capsys: pytest.CaptureFixture[s
     assert "status\tdeploymentId" in capsys.readouterr().out
 
 
-def test_main_rejects_removed_logs_command(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = cli_mod.main(["logs"])
-
-    assert exit_code == 2
-    assert "logs command was removed" in capsys.readouterr().err
-
-
-def test_main_treats_logs_stack_name_as_legacy_deploy(
-    tmp_path: Path,
-    mock_deployer: MagicMock,
+@pytest.mark.parametrize("command", ["logs", "stack-name"])
+def test_main_rejects_unknown_top_level_commands(
+    capsys: pytest.CaptureFixture[str],
+    command: str,
 ) -> None:
-    compose_tmpl = tmp_path / "stack.yml"
-    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc_info:
+        cli_mod.main([command])
 
-    with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
-        exit_code = cli_mod.main(["logs", "-f", str(compose_tmpl)])
-
-    assert exit_code == 0
-    assert mock_deployer.deploy.call_args.args[0] == "logs"
-
-
-@pytest.mark.parametrize("stack_name", ["deploy", "inspect"])
-def test_main_treats_command_named_stack_as_legacy_deploy(
-    tmp_path: Path,
-    mock_deployer: MagicMock,
-    stack_name: str,
-) -> None:
-    compose_tmpl = tmp_path / "stack.yml"
-    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
-
-    with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
-        exit_code = cli_mod.main([stack_name, "-f", str(compose_tmpl)])
-
-    assert exit_code == 0
-    assert mock_deployer.deploy.call_args.args[0] == stack_name
-
-
-def test_command_index_stops_after_separator() -> None:
-    assert cli_mod._command_index(["--", "inspect"], "inspect") is None
+    assert exc_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_main_returns_one_on_dokploy_error(
@@ -238,6 +211,7 @@ def test_main_returns_one_on_dokploy_error(
     with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
         exit_code = cli_mod.main(
             [
+                "deploy",
                 "stack-name",
                 "-f",
                 str(compose_tmpl),
@@ -261,6 +235,7 @@ def test_main_quiet_mode_sets_logging_to_warning(
         cli_mod.main(
             [
                 "-q",
+                "deploy",
                 "stack-name",
                 "-f",
                 str(compose_tmpl),
@@ -283,6 +258,7 @@ def test_main_verbose_mode_sets_logging_to_debug(
         cli_mod.main(
             [
                 "-v",
+                "deploy",
                 "stack-name",
                 "-f",
                 str(compose_tmpl),

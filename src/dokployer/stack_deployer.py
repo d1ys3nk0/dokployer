@@ -6,15 +6,19 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import yaml
 
 from dokployer.constants import (
     DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS,
-    DEFAULT_DEPLOY_WAIT_TIMEOUT_SECONDS,
-    WAIT_INTERVAL,
-    WAIT_TIMEOUT,
+    DEFAULT_DEPLOY_POLL_TIMEOUT_SECONDS,
+    DEFAULT_STACK_POLL_INTERVAL_SECONDS,
+    DEFAULT_STACK_POLL_TIMEOUT_SECONDS,
+    DEPLOY_POLL_INTERVAL,
+    DEPLOY_POLL_TIMEOUT,
+    STACK_POLL_INTERVAL,
+    STACK_POLL_TIMEOUT,
     ComposeStatus,
 )
 from dokployer.errors import (
@@ -35,6 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 MAX_UNKNOWN_STATUS_POLLS = 3
+StackWait = int | Literal[True] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +136,16 @@ class StackDeployer:
             raise ConfigurationError(msg)
         return value
 
+    def _stack_wait_timeout(self, wait: StackWait) -> int | None:
+        if wait is None:
+            return None
+        if wait is True:
+            return self._wait_value(STACK_POLL_TIMEOUT, DEFAULT_STACK_POLL_TIMEOUT_SECONDS)
+        if wait <= 0:
+            msg = f"invalid wait timeout: expected a positive integer, got {wait!r}"
+            raise ConfigurationError(msg)
+        return wait
+
     def _parse_expected_services(self, compose_file_content: str) -> list[ExpectedService]:
         raw = yaml.safe_load(compose_file_content)
         if not isinstance(raw, dict):
@@ -184,8 +199,8 @@ class StackDeployer:
         previous_deployment_id: str | None,
     ) -> None:
         """Poll until deploy completes or times out."""
-        timeout = self._wait_value(WAIT_TIMEOUT, DEFAULT_DEPLOY_WAIT_TIMEOUT_SECONDS)
-        interval = self._wait_value(WAIT_INTERVAL, DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS)
+        timeout = self._wait_value(DEPLOY_POLL_TIMEOUT, DEFAULT_DEPLOY_POLL_TIMEOUT_SECONDS)
+        interval = self._wait_value(DEPLOY_POLL_INTERVAL, DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS)
         deadline = time.monotonic() + timeout
         unknown_polls = 0
         target_deployment_id: str | None = None
@@ -250,7 +265,7 @@ class StackDeployer:
         timeout: int,
     ) -> None:
         deadline = time.monotonic() + timeout
-        interval = self._wait_value(WAIT_INTERVAL, DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS)
+        interval = self._wait_value(STACK_POLL_INTERVAL, DEFAULT_STACK_POLL_INTERVAL_SECONDS)
         last_report = "container status: not checked"
 
         while time.monotonic() < deadline:
@@ -386,7 +401,7 @@ class StackDeployer:
         *,
         template_path: Path | None = None,
         env_template_path: Path | None = None,
-        wait: int | None = None,
+        wait: StackWait = None,
     ) -> None:
         """Upload the stack to Dokploy, trigger deploy, and optionally wait for completion."""
         config = self._config
@@ -397,8 +412,11 @@ class StackDeployer:
 
         raw_template = self._templates.load(template_path)
         compose_file_content = self._templates.interpolate(raw_template)
+        wait_timeout = self._stack_wait_timeout(wait)
         expected_services = (
-            self._parse_expected_services(compose_file_content) if wait is not None else None
+            self._parse_expected_services(compose_file_content)
+            if wait_timeout is not None
+            else None
         )
 
         env_content: str | None = None
@@ -414,10 +432,7 @@ class StackDeployer:
         environment_id = config.environment_id
         if existing_id is None:
             if environment_id is None:
-                msg = (
-                    "missing required environment variable: "
-                    "DOKPLOY_ENV_ID or DOKPLOY_ENVIRONMENT_ID"
-                )
+                msg = "missing required environment variable: DOKPLOY_ENV_ID"
                 raise ConfigurationError(msg)
             env_data = self._client.get_environment(environment_id)
             existing_id = self._find_compose_id(env_data, app_name)
@@ -451,9 +466,9 @@ class StackDeployer:
 
         logger.info("compose.deploy accepted for %s (%s)", compose_id, app_name)
         self._wait_for_deploy(compose_id, app_name, previous_deployment_id)
-        if wait is not None and expected_services is not None:
+        if wait_timeout is not None and expected_services is not None:
             container_app_name = self._compose_app_name(stack_name, compose_id)
-            self._wait_for_containers(container_app_name, expected_services, wait)
+            self._wait_for_containers(container_app_name, expected_services, wait_timeout)
 
 
 def _service_name_from_container(container_name: str) -> str:

@@ -12,12 +12,9 @@ if TYPE_CHECKING:
 
 from dokployer.constants import (
     DOKPLOY_API_KEY,
-    DOKPLOY_APP,
     DOKPLOY_APP_ID,
     DOKPLOY_APP_NAME,
     DOKPLOY_ENV_ID,
-    DOKPLOY_ENVIRONMENT_ID,
-    DOKPLOY_SERVICE_ID,
     DOKPLOY_URL,
 )
 from dokployer.errors import ConfigurationError
@@ -41,20 +38,6 @@ def _env_value(env: Mapping[str, str], name: str) -> str | None:
     return value
 
 
-def _resolve_alias(
-    env: Mapping[str, str],
-    *,
-    canonical: str,
-    alias: str,
-) -> str | None:
-    canonical_value = _env_value(env, canonical)
-    alias_value = _env_value(env, alias)
-    if canonical_value is not None and alias_value is not None and canonical_value != alias_value:
-        msg = f"conflicting environment variables: {canonical} and {alias}"
-        raise ConfigurationError(msg)
-    return canonical_value or alias_value
-
-
 def _required(env: Mapping[str, str], name: str) -> str:
     value = _env_value(env, name)
     if value is None:
@@ -73,24 +56,12 @@ def _validate_base_url(raw_url: str) -> str:
 
 
 def resolve_config(env: Mapping[str, str] | None = None) -> DokployConfig:
-    """Resolve Dokploy config from canonical variables and compatibility aliases."""
+    """Resolve Dokploy config from canonical environment variables."""
     environ = os.environ if env is None else env
     return DokployConfig(
         base_url=_validate_base_url(_required(environ, DOKPLOY_URL)),
         api_key=_required(environ, DOKPLOY_API_KEY),
-        environment_id=_resolve_alias(
-            environ,
-            canonical=DOKPLOY_ENV_ID,
-            alias=DOKPLOY_ENVIRONMENT_ID,
-        ),
-        app_name=_resolve_alias(
-            environ,
-            canonical=DOKPLOY_APP_NAME,
-            alias=DOKPLOY_APP,
-        ),
-        app_id=_resolve_alias(
-            environ,
-            canonical=DOKPLOY_APP_ID,
-            alias=DOKPLOY_SERVICE_ID,
-        ),
+        environment_id=_env_value(environ, DOKPLOY_ENV_ID),
+        app_name=_env_value(environ, DOKPLOY_APP_NAME),
+        app_id=_env_value(environ, DOKPLOY_APP_ID),
     )
