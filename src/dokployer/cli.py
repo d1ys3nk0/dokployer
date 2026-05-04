@@ -8,11 +8,9 @@ import logging
 import sys
 from pathlib import Path
 
-from dokployer.constants import DEFAULT_LOG_LINES, DEFAULT_LOG_SERVICE
 from dokployer.dokploy_client import DokployClient
 from dokployer.errors import DokployerError
 from dokployer.inspector import DokployInspector
-from dokployer.logs import ContainerLogStreamer
 from dokployer.stack_deployer import StackDeployer
 from dokployer.template_manager import ComposeTemplate
 
@@ -178,18 +176,6 @@ def _run_inspect(args: argparse.Namespace) -> None:
         _print_text(data)
 
 
-def _run_logs(args: argparse.Namespace) -> None:
-    client = DokployClient()
-    streamer = ContainerLogStreamer(client)
-    streamer.stream(
-        service=args.service,
-        app_name=args.app_name,
-        ssh_host=args.ssh_host,
-        lines=args.lines,
-        follow=args.follow,
-    )
-
-
 def _add_json_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--json",
@@ -228,43 +214,6 @@ def _parse_inspect_args(raw_argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(raw_argv)
 
 
-def _parse_logs_args(raw_argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="dokployer",
-        description="Stream Docker logs for a Dokploy service container over SSH.",
-    )
-    _add_global_args(parser)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    logs_parser = subparsers.add_parser("logs")
-    logs_parser.add_argument(
-        "service",
-        nargs="?",
-        default=DEFAULT_LOG_SERVICE,
-        help="Compose service name. Default: api.",
-    )
-    logs_parser.add_argument(
-        "--app-name",
-        help="Dokploy compose app name override.",
-    )
-    logs_parser.add_argument(
-        "--ssh-host",
-        help="SSH host. Defaults to DOKPLOY_SSH_HOST or prod-sts-pl01.",
-    )
-    logs_parser.add_argument(
-        "--lines",
-        type=int,
-        default=DEFAULT_LOG_LINES,
-        help="Number of log lines. Default: 200.",
-    )
-    logs_parser.add_argument(
-        "-f",
-        "--follow",
-        action="store_true",
-        help="Follow log output.",
-    )
-    return parser.parse_args(raw_argv)
-
-
 def _parse_deploy_command_args(raw_argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="dokployer",
@@ -297,12 +246,12 @@ def main(argv: list[str] | None = None) -> int:
     if inspect_index is not None:
         args = _parse_inspect_args(raw_argv)
         runner = _run_inspect
-    elif logs_index is not None:
-        args = _parse_logs_args(raw_argv)
-        runner = _run_logs
     elif deploy_index is not None:
         args = _parse_deploy_command_args(raw_argv)
         runner = _run_deploy
+    elif logs_index is not None:
+        sys.stderr.write("dokployer: error: logs command was removed; use Dokploy API data only\n")
+        return 2
     else:
         args = _parse_legacy_deploy_args(raw_argv)
         runner = _run_deploy

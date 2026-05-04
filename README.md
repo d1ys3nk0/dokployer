@@ -17,6 +17,8 @@ Dokploy.
 - Optionally poll Dokploy until deploy status becomes `done`.
 - Inspect Dokploy app, services, containers, and deployments through API-only
   read-only commands.
+- Uses only the Dokploy HTTP API with `DOKPLOY_API_KEY`; it does not use SSH,
+  Docker CLI, or host-level access.
 
 ## Requirements
 
@@ -49,8 +51,6 @@ Optional runtime variables:
   - Max seconds to wait when `--wait` is used. Default: `300`.
 - `WAIT_INTERVAL`
   - Polling interval in seconds when `--wait` is used. Default: `5`.
-- `DOKPLOY_SSH_HOST`
-  - SSH host for `dokployer logs`. Default: `prod-sts-pl01`.
 
 ## Placeholder Syntax
 
@@ -115,16 +115,7 @@ Inspection commands print tab-separated text by default. Add `--json` to print
 JSON.
 
 Inspection commands only use the Dokploy API. They do not use SSH, Docker CLI,
-or log streaming.
-
-Container logs:
-
-```bash
-uv run dokployer logs api --lines 200 --follow
-```
-
-`dokployer logs` uses the Dokploy API to find the running service container,
-then uses SSH to run `sudo docker logs` on the resolved Docker container id.
+or host log streaming.
 
 ## Docker Usage
 

@@ -17,6 +17,5 @@ def clear_dokploy_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DOKPLOY_APP",
         "DOKPLOY_APP_ID",
         "DOKPLOY_SERVICE_ID",
-        "DOKPLOY_SSH_HOST",
     ):
         monkeypatch.delenv(name, raising=False)

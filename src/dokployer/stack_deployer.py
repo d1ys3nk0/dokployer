@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import time
 from typing import TYPE_CHECKING
 
 from dokployer.config import resolve_config
 from dokployer.constants import (
-    DEFAULT_DEPLOY_LOG_LINES,
     DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS,
     DEFAULT_DEPLOY_WAIT_TIMEOUT_SECONDS,
-    DEFAULT_DOKPLOY_SSH_HOST,
-    DOKPLOY_SSH_HOST,
     WAIT_INTERVAL,
     WAIT_TIMEOUT,
     ComposeStatus,
@@ -60,37 +56,6 @@ class StackDeployer:
                 return compose.compose_id
         return None
 
-    def _read_deployment_log(self, deployment: dict[str, object]) -> str | None:
-        log_path = deployment.get("logPath")
-        if not isinstance(log_path, str) or not log_path:
-            return None
-
-        ssh_host = os.environ.get(DOKPLOY_SSH_HOST) or DEFAULT_DOKPLOY_SSH_HOST
-        command = [
-            "ssh",
-            ssh_host,
-            "sudo",
-            "tail",
-            "-n",
-            str(DEFAULT_DEPLOY_LOG_LINES),
-            log_path,
-        ]
-        try:
-            result = subprocess.run(  # noqa: S603
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError as exc:
-            return f"unable to fetch deployment log from {ssh_host}:{log_path}: {exc}"
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            if stderr:
-                return f"unable to fetch deployment log from {ssh_host}:{log_path}: {stderr}"
-            return f"unable to fetch deployment log from {ssh_host}:{log_path}"
-        return result.stdout.strip()
-
     def _deploy_failure_message(self, compose_id: str, stack_name: str) -> str:
         lines = [f"deploy failed: {stack_name}"]
         try:
@@ -115,11 +80,7 @@ class StackDeployer:
         if isinstance(error_message, str) and error_message:
             lines.append(error_message)
 
-        log_text = self._read_deployment_log(latest)
-        if log_text:
-            lines.append("deployment log:")
-            lines.append(log_text)
-        elif not error_message:
+        if not error_message:
             lines.append("deployment log: not available")
 
         return "\n".join(lines)

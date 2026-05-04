@@ -13,7 +13,6 @@ import pytest
 import dokployer.cli as cli_mod
 from dokployer.errors import DeployFailedError
 from dokployer.inspector import DokployInspector
-from dokployer.logs import ContainerLogStreamer
 from dokployer.stack_deployer import StackDeployer
 
 
@@ -155,32 +154,11 @@ def test_main_parses_inspect_deployments_command(capsys: pytest.CaptureFixture[s
     assert "status\tdeploymentId" in capsys.readouterr().out
 
 
-def test_main_parses_logs_command() -> None:
-    streamer = MagicMock(spec=ContainerLogStreamer)
+def test_main_rejects_removed_logs_command(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = cli_mod.main(["logs"])
 
-    with patch.object(cli_mod, "ContainerLogStreamer", return_value=streamer):
-        exit_code = cli_mod.main(
-            [
-                "logs",
-                "worker",
-                "--app-name",
-                "my-app",
-                "--ssh-host",
-                "prod-host",
-                "--lines",
-                "50",
-                "--follow",
-            ],
-        )
-
-    assert exit_code == 0
-    streamer.stream.assert_called_once_with(
-        service="worker",
-        app_name="my-app",
-        ssh_host="prod-host",
-        lines=50,
-        follow=True,
-    )
+    assert exit_code == 2
+    assert "logs command was removed" in capsys.readouterr().err
 
 
 def test_command_index_stops_after_separator() -> None:

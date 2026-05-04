@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -342,13 +341,12 @@ class TestStackDeployerWorkflow:
             deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
         assert "deploy failed" in str(exc_info.value)
 
-    def test_wait_includes_latest_deployment_log_on_error_status(
+    def test_wait_includes_latest_deployment_metadata_without_ssh(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
         monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
-        monkeypatch.setenv("DOKPLOY_SSH_HOST", "deploy-host")
         monkeypatch.setenv("WAIT_TIMEOUT", "10")
         monkeypatch.setenv("WAIT_INTERVAL", "1")
 
@@ -365,21 +363,13 @@ class TestStackDeployerWorkflow:
                 "deploymentId": "dep-001",
                 "status": "error",
                 "logPath": "/etc/dokploy/logs/my-stack/my-stack.log",
+                "errorMessage": (
+                    "Invalid environment variable: environment.INFISICAL_ENCRYPTION_KEY"
+                ),
             }
         ]
 
-        run = MagicMock(
-            return_value=subprocess.CompletedProcess(
-                ["ssh"],
-                0,
-                stdout=(
-                    "Initializing deployment\n"
-                    "Invalid environment variable: environment.INFISICAL_ENCRYPTION_KEY\n"
-                    "Error occurred, check the logs for details.\n"
-                ),
-                stderr="",
-            )
-        )
+        run = MagicMock()
         monkeypatch.setattr("subprocess.run", run)
 
         template = ComposeTemplate()
@@ -390,16 +380,9 @@ class TestStackDeployerWorkflow:
 
         message = str(exc_info.value)
         assert "latest deployment: dep-001" in message
+        assert "deployment log path: /etc/dokploy/logs/my-stack/my-stack.log" in message
         assert "Invalid environment variable: environment.INFISICAL_ENCRYPTION_KEY" in message
-        assert run.call_args.args[0] == [
-            "ssh",
-            "deploy-host",
-            "sudo",
-            "tail",
-            "-n",
-            "200",
-            "/etc/dokploy/logs/my-stack/my-stack.log",
-        ]
+        run.assert_not_called()
 
     def test_wait_raises_deploy_timeout_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
