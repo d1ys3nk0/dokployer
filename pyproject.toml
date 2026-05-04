@@ -3,7 +3,7 @@ name = "dokployer"
 version = "0.1.0"
 description = "Deploy interpolated Docker Swarm stacks to Dokploy."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13,<3.15"
 license = "Apache-2.0"
 authors = [
     { name = "d1ys3nk0" },
@@ -16,9 +16,8 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Build Tools",
     "Topic :: System :: Systems Administration",
 ]
@@ -46,7 +45,7 @@ default-groups = ["dev"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -69,7 +68,7 @@ ignore = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

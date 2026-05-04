@@ -22,7 +22,7 @@ Dokploy.
 
 ## Requirements
 
-- Python `3.11+`
+- Python `3.13` or `3.14`
 - Dokploy API access
 - These environment variables:
   - `DOKPLOY_URL`
