@@ -848,6 +848,42 @@ services:
 
         client.get_stack_containers_by_app_name.assert_called_once_with("real-stack")
 
+    def test_container_wait_prefers_compose_metadata_for_direct_app_id(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text(
+            "version: '3'\nservices:\n  app:\n    image: myimage:latest\n",
+            encoding="utf-8",
+        )
+
+        client = MagicMock()
+        _successful_deploy_status(client)
+        client.get_compose.return_value = {"composeId": "cmp-direct", "name": "real-stack"}
+        client.get_stack_containers_by_app_name.return_value = [
+            {"containerId": "ctr-1", "name": "real-stack_app.1.abc"}
+        ]
+        client.get_container_config.return_value = {
+            "State": {"Status": "running"},
+            "Config": {"Image": "myimage:latest"},
+        }
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy("cli-alias", template_path=compose_tmpl, wait=60)
+
+        client.get_stack_containers_by_app_name.assert_called_once_with("real-stack")
+
     def test_container_wait_requires_resolved_app_name(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
