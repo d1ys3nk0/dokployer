@@ -12,4 +12,7 @@ COPY src ./src
 
 RUN uv pip install --system .
 
+RUN useradd --system --create-home --user-group dokployer
+USER dokployer
+
 CMD ["dokployer", "--help"]

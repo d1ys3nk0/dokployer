@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from dokployer.config import DokployConfig, resolve_config
 from dokployer.errors import ConfigurationError
 from dokployer.models import parse_environment_response
+
+if TYPE_CHECKING:
+    from dokployer.config import DokployConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,9 +22,6 @@ class ResolvedApp:
 
 class DokployInspectClient(Protocol):
     """Client methods used by read-only inspection workflows."""
-
-    base_url: str
-    api_key: str
 
     def get_environment(self, environment_id: str) -> dict[str, object]:
         """Fetch environment data from Dokploy."""
@@ -44,13 +43,11 @@ class DokployInspectClient(Protocol):
 class DokployInspector:
     """API-only Dokploy app inspection helper."""
 
-    def __init__(self, client: DokployInspectClient) -> None:
+    def __init__(self, client: DokployInspectClient, config: DokployConfig) -> None:
         """Initialize inspector with a Dokploy API client."""
         self._client = client
-
-    def _configure_client(self, config: DokployConfig) -> None:
-        self._client.base_url = config.base_url
-        self._client.api_key = config.api_key
+        self._config = config
+        self._app_cache: dict[str | None, ResolvedApp] = {}
 
     def _compose_name(self, compose: dict[str, object]) -> str | None:
         name = compose.get("name")
@@ -62,15 +59,18 @@ class DokployInspector:
         return None
 
     def _resolve_app(self, app_name: str | None = None) -> ResolvedApp:
-        config = resolve_config()
-        self._configure_client(config)
+        if app_name in self._app_cache:
+            return self._app_cache[app_name]
 
+        config = self._config
         if config.app_id is not None:
             compose = self._client.get_compose(config.app_id)
-            return ResolvedApp(
+            resolved = ResolvedApp(
                 compose_id=config.app_id,
                 app_name=app_name or self._compose_name(compose) or config.app_name,
             )
+            self._app_cache[app_name] = resolved
+            return resolved
 
         target_name = app_name or config.app_name
         if target_name is None:
@@ -84,20 +84,20 @@ class DokployInspector:
         env_resp = parse_environment_response(env_data)
         for compose_summary in env_resp.compose:
             if compose_summary.name == target_name:
-                return ResolvedApp(
+                resolved = ResolvedApp(
                     compose_id=compose_summary.compose_id,
                     app_name=target_name,
                 )
+                self._app_cache[app_name] = resolved
+                return resolved
 
         msg = f"compose app not found in environment: {target_name}"
         raise ConfigurationError(msg)
 
     def app(self, app_name: str | None = None) -> dict[str, object]:
         """Return compose app details."""
-        config = resolve_config()
-        self._configure_client(config)
-        if config.app_id is not None:
-            return self._client.get_compose(config.app_id)
+        if self._config.app_id is not None:
+            return self._client.get_compose(self._config.app_id)
         app = self._resolve_app(app_name)
         return self._client.get_compose(app.compose_id)
 

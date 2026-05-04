@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 import pytest
 
+from dokployer.config import resolve_config
 from dokployer.dokploy_client import DokployClient
 from dokployer.errors import (
     ConfigurationError,
@@ -21,13 +22,33 @@ from dokployer.stack_deployer import StackDeployer
 from dokployer.template_manager import ComposeTemplate
 
 
+def _deployer(client: object, template: ComposeTemplate) -> StackDeployer:
+    return StackDeployer(client, template, resolve_config())
+
+
+def _fast_wait_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = 0.0
+
+    def monotonic() -> float:
+        nonlocal now
+        now += 1.0
+        return now
+
+    monkeypatch.setattr("dokployer.stack_deployer.time.monotonic", monotonic)
+    monkeypatch.setattr("dokployer.stack_deployer.time.sleep", lambda _seconds: None)
+
+
 class TestStackDeployerWorkflow:
     """Tests for StackDeployer deployment workflow."""
 
     def test_find_compose_id_returns_id_when_found(self) -> None:
         client = MagicMock(spec=DokployClient)
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = StackDeployer(
+            client,
+            template,
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
 
         env_data = {"compose": [{"name": "my-stack", "composeId": "cmp-abc"}]}
         result = deployer._find_compose_id(env_data, "my-stack")
@@ -37,7 +58,11 @@ class TestStackDeployerWorkflow:
     def test_find_compose_id_returns_none_when_not_found(self) -> None:
         client = MagicMock(spec=DokployClient)
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = StackDeployer(
+            client,
+            template,
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
 
         env_data = {"compose": [{"name": "other", "composeId": "cmp-xyz"}]}
         result = deployer._find_compose_id(env_data, "my-stack")
@@ -47,7 +72,11 @@ class TestStackDeployerWorkflow:
     def test_find_compose_id_returns_none_on_malformed_data(self) -> None:
         client = MagicMock(spec=DokployClient)
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = StackDeployer(
+            client,
+            template,
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
 
         env_data = {"compose": "not-a-list"}
         result = deployer._find_compose_id(env_data, "my-stack")
@@ -64,12 +93,8 @@ class TestStackDeployerWorkflow:
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
 
-        client = DokployClient()
-        template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
-
         with pytest.raises(ConfigurationError) as exc_info:
-            deployer.deploy("my-stack", template_path=compose_tmpl)
+            resolve_config()
         assert "DOKPLOY_URL" in str(exc_info.value)
 
     def test_deploy_raises_configuration_error_when_api_key_missing(
@@ -82,12 +107,8 @@ class TestStackDeployerWorkflow:
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
 
-        client = DokployClient()
-        template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
-
         with pytest.raises(ConfigurationError) as exc_info:
-            deployer.deploy("my-stack", template_path=compose_tmpl)
+            resolve_config()
         assert "DOKPLOY_API_KEY" in str(exc_info.value)
 
     def test_deploy_raises_configuration_error_when_environment_id_missing(
@@ -100,9 +121,9 @@ class TestStackDeployerWorkflow:
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
 
-        client = DokployClient()
+        client = MagicMock()
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with pytest.raises(ConfigurationError) as exc_info:
             deployer.deploy("my-stack", template_path=compose_tmpl)
@@ -120,7 +141,7 @@ class TestStackDeployerWorkflow:
 
         client = MagicMock()
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with pytest.raises(ConfigurationError) as exc_info:
             deployer.deploy(
@@ -150,7 +171,7 @@ class TestStackDeployerWorkflow:
         }
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy("my-stack", template_path=compose_tmpl)
@@ -178,7 +199,7 @@ class TestStackDeployerWorkflow:
         client.create_compose.return_value = {"composeId": "cmp-new"}
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy("my-stack", template_path=compose_tmpl)
@@ -206,7 +227,7 @@ class TestStackDeployerWorkflow:
         client.create_compose.return_value = {"composeId": "cmp-new"}
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy("my-stack", template_path=compose_tmpl)
@@ -230,7 +251,7 @@ class TestStackDeployerWorkflow:
 
         client = MagicMock()
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy("my-stack", template_path=compose_tmpl)
@@ -253,7 +274,7 @@ class TestStackDeployerWorkflow:
 
         client = MagicMock()
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy(None, template_path=compose_tmpl)
@@ -281,7 +302,7 @@ class TestStackDeployerWorkflow:
         client.create_compose.return_value = {"composeId": "cmp-new"}
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy("my-stack", template_path=compose_tmpl)
@@ -308,7 +329,7 @@ class TestStackDeployerWorkflow:
         }
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy("my-stack", template_path=compose_tmpl)
@@ -324,6 +345,7 @@ class TestStackDeployerWorkflow:
         monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
         monkeypatch.setenv("WAIT_TIMEOUT", "10")
         monkeypatch.setenv("WAIT_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -333,9 +355,14 @@ class TestStackDeployerWorkflow:
             "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
         }
         client.get_compose_status.return_value = "error"
+        client.get_deployments_by_compose.side_effect = [
+            [],
+            [{"deploymentId": "dep-001", "status": "error"}],
+            [{"deploymentId": "dep-001", "status": "error"}],
+        ]
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with pytest.raises(DeployFailedError) as exc_info:
             deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
@@ -349,6 +376,7 @@ class TestStackDeployerWorkflow:
         monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
         monkeypatch.setenv("WAIT_TIMEOUT", "10")
         monkeypatch.setenv("WAIT_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -358,22 +386,19 @@ class TestStackDeployerWorkflow:
             "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
         }
         client.get_compose_status.return_value = "error"
-        client.get_deployments_by_compose.return_value = [
-            {
-                "deploymentId": "dep-001",
-                "status": "error",
-                "logPath": "/etc/dokploy/logs/my-stack/my-stack.log",
-                "errorMessage": (
-                    "Invalid environment variable: environment.INFISICAL_ENCRYPTION_KEY"
-                ),
-            }
-        ]
+        deployment = {
+            "deploymentId": "dep-001",
+            "status": "error",
+            "logPath": "/etc/dokploy/logs/my-stack/my-stack.log",
+            "errorMessage": "Invalid environment variable: environment.INFISICAL_ENCRYPTION_KEY",
+        }
+        client.get_deployments_by_compose.side_effect = [[], [deployment], [deployment]]
 
         run = MagicMock()
         monkeypatch.setattr("subprocess.run", run)
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with pytest.raises(DeployFailedError) as exc_info:
             deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
@@ -392,6 +417,7 @@ class TestStackDeployerWorkflow:
         monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
         monkeypatch.setenv("WAIT_TIMEOUT", "2")
         monkeypatch.setenv("WAIT_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -401,9 +427,10 @@ class TestStackDeployerWorkflow:
             "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
         }
         client.get_compose_status.return_value = "running"
+        client.get_deployments_by_compose.return_value = []
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with pytest.raises(DeployTimeoutError) as exc_info:
             deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
@@ -417,6 +444,7 @@ class TestStackDeployerWorkflow:
         monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
         monkeypatch.setenv("WAIT_TIMEOUT", "10")
         monkeypatch.setenv("WAIT_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
@@ -426,12 +454,115 @@ class TestStackDeployerWorkflow:
             "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
         }
         client.get_compose_status.side_effect = ["running", "done"]
+        client.get_deployments_by_compose.side_effect = [
+            [],
+            [{"deploymentId": "dep-001", "status": "running"}],
+            [{"deploymentId": "dep-001", "status": "done"}],
+        ]
 
         template = ComposeTemplate()
-        deployer = StackDeployer(client, template)
+        deployer = _deployer(client, template)
 
         with CaplogForDeployer(deployer):
             deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
+
+    def test_wait_ignores_previous_done_status_until_new_deployment(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("WAIT_TIMEOUT", "10")
+        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        client.get_compose_status.side_effect = ["done", "done"]
+        client.get_deployments_by_compose.side_effect = [
+            [{"deploymentId": "dep-old", "status": "done"}],
+            [{"deploymentId": "dep-old", "status": "done"}],
+            [{"deploymentId": "dep-new", "status": "done"}],
+        ]
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
+
+        assert client.get_compose_status.call_count == 2
+
+    @pytest.mark.parametrize("name", ["WAIT_TIMEOUT", "WAIT_INTERVAL"])
+    @pytest.mark.parametrize("value", ["foo", "0"])
+    def test_wait_rejects_invalid_wait_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        name: str,
+        value: str,
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv(name, value)
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        client.get_deployments_by_compose.return_value = []
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
+
+        assert name in str(exc_info.value)
+
+    def test_wait_raises_after_repeated_unknown_status(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("WAIT_TIMEOUT", "10")
+        monkeypatch.setenv("WAIT_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        client.get_compose_status.return_value = "unknown"
+        client.get_deployments_by_compose.side_effect = [
+            [],
+            [{"deploymentId": "dep-001", "status": "running"}],
+            [{"deploymentId": "dep-001", "status": "running"}],
+            [{"deploymentId": "dep-001", "status": "running"}],
+            [{"deploymentId": "dep-001", "status": "running"}],
+        ]
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with pytest.raises(DeployFailedError) as exc_info:
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
+
+        assert "unknown status" in str(exc_info.value)
 
 
 class CaplogForDeployer:

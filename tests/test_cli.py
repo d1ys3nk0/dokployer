@@ -21,6 +21,13 @@ def mock_deployer() -> MagicMock:
     return MagicMock(spec=StackDeployer)
 
 
+@pytest.fixture(autouse=True)
+def dokploy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+    monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+
+
 def test_main_parses_arguments(
     tmp_path: Path,
     mock_deployer: MagicMock,
@@ -159,6 +166,36 @@ def test_main_rejects_removed_logs_command(capsys: pytest.CaptureFixture[str]) -
 
     assert exit_code == 2
     assert "logs command was removed" in capsys.readouterr().err
+
+
+def test_main_treats_logs_stack_name_as_legacy_deploy(
+    tmp_path: Path,
+    mock_deployer: MagicMock,
+) -> None:
+    compose_tmpl = tmp_path / "stack.yml"
+    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+    with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
+        exit_code = cli_mod.main(["logs", "-f", str(compose_tmpl)])
+
+    assert exit_code == 0
+    assert mock_deployer.deploy.call_args.args[0] == "logs"
+
+
+@pytest.mark.parametrize("stack_name", ["deploy", "inspect"])
+def test_main_treats_command_named_stack_as_legacy_deploy(
+    tmp_path: Path,
+    mock_deployer: MagicMock,
+    stack_name: str,
+) -> None:
+    compose_tmpl = tmp_path / "stack.yml"
+    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+    with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
+        exit_code = cli_mod.main([stack_name, "-f", str(compose_tmpl)])
+
+    assert exit_code == 0
+    assert mock_deployer.deploy.call_args.args[0] == stack_name
 
 
 def test_command_index_stops_after_separator() -> None:

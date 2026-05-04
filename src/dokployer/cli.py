@@ -8,6 +8,7 @@ import logging
 import sys
 from pathlib import Path
 
+from dokployer.config import resolve_config
 from dokployer.dokploy_client import DokployClient
 from dokployer.errors import DokployerError
 from dokployer.inspector import DokployInspector
@@ -74,11 +75,27 @@ def _add_deploy_args(parser: argparse.ArgumentParser) -> None:
 
 def _command_index(argv: list[str], command: str) -> int | None:
     for index, arg in enumerate(argv):
-        if arg == command:
-            return index
         if arg == "--":
             return None
+        if arg.startswith("-"):
+            continue
+        if arg == command:
+            return index
+        return None
     return None
+
+
+def _legacy_command_name(argv: list[str], command: str, index: int | None) -> bool:
+    if index is None:
+        return False
+    if command == "logs":
+        return len(argv) > 1
+    if command == "deploy":
+        return len(argv) > index + 1 and argv[index + 1].startswith("-")
+    if command == "inspect":
+        inspect_commands = {"app", "services", "containers", "deployments"}
+        return len(argv) <= index + 1 or argv[index + 1] not in inspect_commands
+    return False
 
 
 def _print_json(data: object) -> None:
@@ -144,9 +161,10 @@ def _print_text(data: object) -> None:
 
 
 def _run_deploy(args: argparse.Namespace) -> None:
+    config = resolve_config()
     template = ComposeTemplate()
-    client = DokployClient()
-    deployer = StackDeployer(client, template)
+    client = DokployClient(config)
+    deployer = StackDeployer(client, template, config)
     deployer.deploy(
         args.app_name,
         template_path=args.template_path,
@@ -156,8 +174,9 @@ def _run_deploy(args: argparse.Namespace) -> None:
 
 
 def _run_inspect(args: argparse.Namespace) -> None:
-    client = DokployClient()
-    inspector = DokployInspector(client)
+    config = resolve_config()
+    client = DokployClient(config)
+    inspector = DokployInspector(client, config)
     data: object
     if args.inspect_command == "app":
         data = inspector.app(args.app_name)
@@ -167,8 +186,6 @@ def _run_inspect(args: argparse.Namespace) -> None:
         data = inspector.containers(args.app_name, running=args.running)
     elif args.inspect_command == "deployments":
         data = inspector.deployments(args.limit, args.app_name)
-    else:
-        data = None
 
     if args.json_output:
         _print_json(data)
@@ -243,13 +260,17 @@ def main(argv: list[str] | None = None) -> int:
     inspect_index = _command_index(raw_argv, "inspect")
     logs_index = _command_index(raw_argv, "logs")
 
-    if inspect_index is not None:
+    legacy_deploy_name = _legacy_command_name(raw_argv, "deploy", deploy_index)
+    legacy_inspect_name = _legacy_command_name(raw_argv, "inspect", inspect_index)
+    legacy_logs_name = _legacy_command_name(raw_argv, "logs", logs_index)
+
+    if inspect_index is not None and not legacy_inspect_name:
         args = _parse_inspect_args(raw_argv)
         runner = _run_inspect
-    elif deploy_index is not None:
+    elif deploy_index is not None and not legacy_deploy_name:
         args = _parse_deploy_command_args(raw_argv)
         runner = _run_deploy
-    elif logs_index is not None:
+    elif logs_index is not None and not legacy_logs_name:
         sys.stderr.write("dokployer: error: logs command was removed; use Dokploy API data only\n")
         return 2
     else:

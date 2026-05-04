@@ -13,6 +13,10 @@ from dokployer.dokploy_client import DokployClient
 from dokployer.errors import DokployAPIError
 
 
+def _client() -> DokployClient:
+    return DokployClient(base_url="http://test.local", api_key="key")
+
+
 class MockResponse:
     """Mock response that works as a context manager for urllib."""
 
@@ -38,31 +42,18 @@ class TestDokployClientTransport:
         assert client.api_key == "secret"
         assert client.timeout == 60
 
-    def test_client_uses_env_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_client_requires_explicit_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://env:9999")
         monkeypatch.setenv("DOKPLOY_API_KEY", "env-key")
-        client = DokployClient()
-        assert client.base_url == "http://env:9999"
-        assert client.api_key == "env-key"
-
-    def test_required_env_raises_when_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MISSING_VAR", raising=False)
-        client = DokployClient()
-        with pytest.raises(DokployAPIError) as exc_info:
-            client._required_env("MISSING_VAR")
-        assert "missing required environment variable: MISSING_VAR" in str(exc_info.value)
-
-    def test_required_env_returns_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MY_VAR", "my-value")
-        client = DokployClient()
-        assert client._required_env("MY_VAR") == "my-value"
+        with pytest.raises(TypeError):
+            DokployClient()
 
     def test_raise_if_api_error_silent_on_non_json(self) -> None:
-        client = DokployClient()
+        client = _client()
         client._raise_if_api_error("/test", "not json at all")
 
     def test_raise_if_api_error_raises_on_error_code(self) -> None:
-        client = DokployClient()
+        client = _client()
         with pytest.raises(DokployAPIError) as exc_info:
             client._raise_if_api_error(
                 "/test",
@@ -71,11 +62,15 @@ class TestDokployClientTransport:
         assert "SOME_ERROR" in str(exc_info.value)
         assert "Dokploy API error" in str(exc_info.value)
 
+    def test_raise_if_api_error_ignores_success_payload_code(self) -> None:
+        client = _client()
+        client._raise_if_api_error("/test", '{"code": "entity-code", "name": "app"}')
+
     def test_request_builds_correct_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key123")
 
-        client = DokployClient()
+        client = DokployClient(base_url="http://test.local", api_key="key123")
 
         mock_response = MockResponse(b'{"result": "ok"}')
 
@@ -92,7 +87,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "secret-key")
 
-        client = DokployClient()
+        client = DokployClient(base_url="http://test.local", api_key="secret-key")
 
         mock_response = MockResponse(b'{"result": "ok"}')
 
@@ -103,6 +98,7 @@ class TestDokployClientTransport:
         call_args = urllib.request.urlopen.call_args
         req = call_args[0][0]
         assert req.headers.get("X-api-key") == "secret-key"
+        assert req.headers.get("User-agent", "").startswith("dokployer/")
 
     def test_request_raises_dokploy_api_error_on_http_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -110,7 +106,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         def raise_http_error(_req: object, **_kwargs: object) -> MagicMock:
             err = urllib.error.HTTPError(
@@ -134,7 +130,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         def raise_url_error(_req: object, **_kwargs: object) -> MagicMock:
             msg = "connection refused"
@@ -146,11 +142,36 @@ class TestDokployClientTransport:
             client._request("GET", "/api/test")
         assert "connection refused" in str(exc_info.value)
 
+    def test_get_status_retries_transient_get_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client()
+        mock_response = MockResponse(b'{"composeStatus": "running"}')
+        calls = 0
+
+        def capture_urlopen(_req: object, **_kwargs: object) -> MockResponse:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                err = urllib.error.HTTPError(
+                    url="http://test.local/api/compose.one",
+                    code=503,
+                    msg="Service Unavailable",
+                    hdrs={},
+                    fp=None,
+                )
+                raise err
+            return mock_response
+
+        monkeypatch.setattr("urllib.request.urlopen", capture_urlopen)
+        monkeypatch.setattr("dokployer.dokploy_client.time.sleep", lambda _seconds: None)
+
+        assert client.get_compose_status("cmp-123") == "running"
+        assert calls == 2
+
     def test_request_with_body_sends_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         mock_response = MockResponse(b'{"ok": true}')
 
@@ -166,14 +187,12 @@ class TestDokployClientTransport:
         client._request("POST", "/api/create", body={"name": "test"})
 
         assert captured_data["body"]["name"] == "test"
-        req = captured_data.get("body", {})
-        assert req.get("name") == "test"
 
     def test_get_environment_returns_parsed_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         mock_response = MockResponse(b'{"compose": []}')
 
@@ -190,7 +209,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         mock_response = MockResponse(b'{"composeId": "cmp-123"}')
 
@@ -207,7 +226,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         mock_response = MockResponse(b'{"ok": true}')
 
@@ -236,7 +255,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         mock_response = MockResponse(b'{"composeStatus": "running"}')
 
@@ -255,7 +274,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         mock_response = MockResponse(b'[{"name": "app_api.1.abc", "state": "running"}]')
 
@@ -276,7 +295,7 @@ class TestDokployClientTransport:
         monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
         monkeypatch.setenv("DOKPLOY_API_KEY", "key")
 
-        client = DokployClient()
+        client = _client()
 
         mock_response = MockResponse(b'{"result": {"data": {"json": [{"deploymentId": "dep-1"}]}}}')
 

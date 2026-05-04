@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import urllib.parse
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -62,11 +63,20 @@ def _required(env: Mapping[str, str], name: str) -> str:
     return value
 
 
+def _validate_base_url(raw_url: str) -> str:
+    url = raw_url.rstrip("/")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc == "":
+        msg = "invalid DOKPLOY_URL: expected http(s) URL with scheme and host"
+        raise ConfigurationError(msg)
+    return url
+
+
 def resolve_config(env: Mapping[str, str] | None = None) -> DokployConfig:
     """Resolve Dokploy config from canonical variables and compatibility aliases."""
     environ = os.environ if env is None else env
     return DokployConfig(
-        base_url=_required(environ, DOKPLOY_URL).rstrip("/"),
+        base_url=_validate_base_url(_required(environ, DOKPLOY_URL)),
         api_key=_required(environ, DOKPLOY_API_KEY),
         environment_id=_resolve_alias(
             environ,

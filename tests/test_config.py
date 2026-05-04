@@ -49,3 +49,11 @@ def test_resolve_config_rejects_conflicting_aliases(canonical: str, alias: str) 
 
     assert canonical in str(exc_info.value)
     assert alias in str(exc_info.value)
+
+
+def test_resolve_config_rejects_url_without_scheme() -> None:
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_config({"DOKPLOY_URL": "dokploy.local", "DOKPLOY_API_KEY": "key"})
+
+    assert "DOKPLOY_URL" in str(exc_info.value)
+    assert "scheme" in str(exc_info.value)
