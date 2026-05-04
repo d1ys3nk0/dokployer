@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.client import HTTPException
 
@@ -57,12 +58,12 @@ class DokployClient:
                 path=label,
             )
 
-    def _request(
+    def _request_json(
         self,
         method: str,
         path: str,
         body: dict[str, str] | None = None,
-    ) -> dict[str, object]:
+    ) -> object:
         url = f"{self.base_url}{path}"
         headers = {
             "accept": "application/json",
@@ -106,10 +107,19 @@ class DokployClient:
 
         self._raise_if_api_error(path, text)
         try:
-            obj = json.loads(text)
+            obj: object = json.loads(text)
         except json.JSONDecodeError:
             return {}
 
+        return obj
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        obj = self._request_json(method, path, body)
         return obj if isinstance(obj, dict) else {}
 
     def get_environment(self, environment_id: str) -> dict[str, object]:
@@ -162,3 +172,33 @@ class DokployClient:
         """Poll compose status and return status string."""
         data = self._request("GET", f"/api/compose.one?composeId={compose_id}")
         return parse_compose_status(data)
+
+    def get_compose(self, compose_id: str) -> dict[str, object]:
+        """Fetch compose app details."""
+        return self._request("GET", f"/api/compose.one?composeId={compose_id}")
+
+    def get_stack_containers_by_app_name(self, app_name: str) -> list[object]:
+        """Fetch stack containers for a compose app name."""
+        query = urllib.parse.urlencode({"appName": app_name})
+        data = self._request_json(
+            "GET",
+            f"/api/docker.getStackContainersByAppName?{query}",
+        )
+        return data if isinstance(data, list) else []
+
+    def get_deployments_by_compose(self, compose_id: str) -> list[object]:
+        """Fetch deployments for a compose app."""
+        input_json = json.dumps({"json": {"composeId": compose_id}}, separators=(",", ":"))
+        query = urllib.parse.urlencode({"input": input_json})
+        data = self._request(
+            "GET",
+            f"/api/trpc/deployment.allByCompose?{query}",
+        )
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return []
+        result_data = result.get("data")
+        if not isinstance(result_data, dict):
+            return []
+        json_data = result_data.get("json")
+        return json_data if isinstance(json_data, list) else []

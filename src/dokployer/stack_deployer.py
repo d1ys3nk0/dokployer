@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
+from dokployer.config import resolve_config
 from dokployer.constants import (
+    DEFAULT_DEPLOY_LOG_LINES,
     DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS,
     DEFAULT_DEPLOY_WAIT_TIMEOUT_SECONDS,
-    DOKPLOY_API_KEY,
-    DOKPLOY_ENVIRONMENT_ID,
-    DOKPLOY_URL,
+    DEFAULT_DOKPLOY_SSH_HOST,
+    DOKPLOY_SSH_HOST,
     WAIT_INTERVAL,
     WAIT_TIMEOUT,
     ComposeStatus,
@@ -58,6 +60,70 @@ class StackDeployer:
                 return compose.compose_id
         return None
 
+    def _read_deployment_log(self, deployment: dict[str, object]) -> str | None:
+        log_path = deployment.get("logPath")
+        if not isinstance(log_path, str) or not log_path:
+            return None
+
+        ssh_host = os.environ.get(DOKPLOY_SSH_HOST) or DEFAULT_DOKPLOY_SSH_HOST
+        command = [
+            "ssh",
+            ssh_host,
+            "sudo",
+            "tail",
+            "-n",
+            str(DEFAULT_DEPLOY_LOG_LINES),
+            log_path,
+        ]
+        try:
+            result = subprocess.run(  # noqa: S603
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            return f"unable to fetch deployment log from {ssh_host}:{log_path}: {exc}"
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if stderr:
+                return f"unable to fetch deployment log from {ssh_host}:{log_path}: {stderr}"
+            return f"unable to fetch deployment log from {ssh_host}:{log_path}"
+        return result.stdout.strip()
+
+    def _deploy_failure_message(self, compose_id: str, stack_name: str) -> str:
+        lines = [f"deploy failed: {stack_name}"]
+        try:
+            deployments = self._client.get_deployments_by_compose(compose_id)
+        except DokployAPIError as exc:
+            lines.append(f"unable to fetch deployment metadata: {exc}")
+            return "\n".join(lines)
+
+        latest = deployments[0] if deployments and isinstance(deployments[0], dict) else None
+        if latest is None:
+            lines.append("latest deployment metadata: not found")
+            return "\n".join(lines)
+
+        deployment_id = latest.get("deploymentId")
+        if isinstance(deployment_id, str) and deployment_id:
+            lines.append(f"latest deployment: {deployment_id}")
+        log_path = latest.get("logPath")
+        if isinstance(log_path, str) and log_path:
+            lines.append(f"deployment log path: {log_path}")
+
+        error_message = latest.get("errorMessage")
+        if isinstance(error_message, str) and error_message:
+            lines.append(error_message)
+
+        log_text = self._read_deployment_log(latest)
+        if log_text:
+            lines.append("deployment log:")
+            lines.append(log_text)
+        elif not error_message:
+            lines.append("deployment log: not available")
+
+        return "\n".join(lines)
+
     def _wait_for_deploy(self, compose_id: str, stack_name: str) -> None:
         """Poll until deploy completes or times out."""
         timeout = int(os.environ.get(WAIT_TIMEOUT, str(DEFAULT_DEPLOY_WAIT_TIMEOUT_SECONDS)))
@@ -72,36 +138,28 @@ class StackDeployer:
                 logger.info("Deploy OK: %s", stack_name)
                 return
             if status_str == ComposeStatus.ERROR:
-                msg = f"deploy failed: {stack_name}"
-                raise DeployFailedError(msg)
+                raise DeployFailedError(self._deploy_failure_message(compose_id, stack_name))
 
         msg = f"deploy timed out after {timeout}s: {stack_name}"
         raise DeployTimeoutError(msg)
 
     def deploy(
         self,
-        stack_name: str,
+        stack_name: str | None,
         *,
         template_path: Path | None = None,
         env_template_path: Path | None = None,
         wait: bool = False,
     ) -> None:
         """Upload the stack to Dokploy, trigger deploy, and optionally wait for completion."""
-        base_url = os.environ.get(DOKPLOY_URL, "")
-        if not base_url:
-            msg = "missing required environment variable: DOKPLOY_URL"
-            raise ConfigurationError(msg)
-        api_key = os.environ.get(DOKPLOY_API_KEY, "")
-        if not api_key:
-            msg = "missing required environment variable: DOKPLOY_API_KEY"
-            raise ConfigurationError(msg)
-        environment_id = os.environ.get(DOKPLOY_ENVIRONMENT_ID, "")
-        if not environment_id:
-            msg = "missing required environment variable: DOKPLOY_ENVIRONMENT_ID"
+        config = resolve_config()
+        app_name = stack_name or config.app_name or config.app_id
+        if app_name is None:
+            msg = "missing app target: pass APP_NAME or set DOKPLOY_APP_NAME or DOKPLOY_APP_ID"
             raise ConfigurationError(msg)
 
-        self._client.base_url = base_url.rstrip("/")
-        self._client.api_key = api_key
+        self._client.base_url = config.base_url
+        self._client.api_key = config.api_key
 
         raw_template = self._templates.load(template_path)
         compose_file_content = self._templates.interpolate(raw_template)
@@ -115,21 +173,35 @@ class StackDeployer:
                 env_template_path.read_text(encoding="utf-8"),
             )
 
-        env_data = self._client.get_environment(environment_id)
-        existing_id = self._find_compose_id(env_data, stack_name)
+        existing_id = config.app_id
+        if existing_id is None:
+            if config.environment_id is None:
+                msg = (
+                    "missing required environment variable: "
+                    "DOKPLOY_ENV_ID or DOKPLOY_ENVIRONMENT_ID"
+                )
+                raise ConfigurationError(msg)
+            env_data = self._client.get_environment(config.environment_id)
+            existing_id = self._find_compose_id(env_data, app_name)
 
         if existing_id:
             compose_id = existing_id
             logger.info(
                 "Using existing compose stack '%s' (%s)",
-                stack_name,
+                app_name,
                 compose_id,
             )
         else:
-            logger.info("Compose stack '%s' not found; creating...", stack_name)
+            if config.environment_id is None:
+                msg = (
+                    "missing required environment variable: "
+                    "DOKPLOY_ENV_ID or DOKPLOY_ENVIRONMENT_ID"
+                )
+                raise ConfigurationError(msg)
+            logger.info("Compose stack '%s' not found; creating...", app_name)
             created = self._client.create_compose(
-                name=stack_name,
-                environment_id=environment_id,
+                name=app_name,
+                environment_id=config.environment_id,
             )
             try:
                 compose_id = parse_compose_created(created)
@@ -144,6 +216,6 @@ class StackDeployer:
         )
         self._client.deploy_compose(compose_id)
 
-        logger.info("compose.deploy accepted for %s (%s)", compose_id, stack_name)
+        logger.info("compose.deploy accepted for %s (%s)", compose_id, app_name)
         if wait:
-            self._wait_for_deploy(compose_id, stack_name)
+            self._wait_for_deploy(compose_id, app_name)

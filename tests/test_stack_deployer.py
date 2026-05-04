@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -191,6 +192,77 @@ class TestStackDeployerWorkflow:
         call_kwargs = client.update_compose.call_args.kwargs
         assert call_kwargs["compose_id"] == "cmp-new"
 
+    def test_deploy_uses_canonical_env_id(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-new")
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_environment.return_value = {"compose": []}
+        client.create_compose.return_value = {"composeId": "cmp-new"}
+
+        template = ComposeTemplate()
+        deployer = StackDeployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy("my-stack", template_path=compose_tmpl)
+
+        client.create_compose.assert_called_once_with(
+            name="my-stack",
+            environment_id="env-new",
+        )
+
+    def test_deploy_uses_app_id_without_environment_lookup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.delenv("DOKPLOY_ENVIRONMENT_ID", raising=False)
+        monkeypatch.delenv("DOKPLOY_ENV_ID", raising=False)
+        monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        template = ComposeTemplate()
+        deployer = StackDeployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy("my-stack", template_path=compose_tmpl)
+
+        client.get_environment.assert_not_called()
+        client.create_compose.assert_not_called()
+        client.update_compose.assert_called_once()
+        call_kwargs = client.update_compose.call_args.kwargs
+        assert call_kwargs["compose_id"] == "cmp-direct"
+
+    def test_deploy_allows_app_id_without_app_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        template = ComposeTemplate()
+        deployer = StackDeployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy(None, template_path=compose_tmpl)
+
+        client.get_environment.assert_not_called()
+        client.update_compose.assert_called_once()
+        assert client.update_compose.call_args.kwargs["compose_id"] == "cmp-direct"
+
     def test_deploy_calls_deploy_compose(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -269,6 +341,65 @@ class TestStackDeployerWorkflow:
         with pytest.raises(DeployFailedError) as exc_info:
             deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
         assert "deploy failed" in str(exc_info.value)
+
+    def test_wait_includes_latest_deployment_log_on_error_status(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENVIRONMENT_ID", "env-001")
+        monkeypatch.setenv("DOKPLOY_SSH_HOST", "deploy-host")
+        monkeypatch.setenv("WAIT_TIMEOUT", "10")
+        monkeypatch.setenv("WAIT_INTERVAL", "1")
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        client.get_compose_status.return_value = "error"
+        client.get_deployments_by_compose.return_value = [
+            {
+                "deploymentId": "dep-001",
+                "status": "error",
+                "logPath": "/etc/dokploy/logs/my-stack/my-stack.log",
+            }
+        ]
+
+        run = MagicMock(
+            return_value=subprocess.CompletedProcess(
+                ["ssh"],
+                0,
+                stdout=(
+                    "Initializing deployment\n"
+                    "Invalid environment variable: environment.INFISICAL_ENCRYPTION_KEY\n"
+                    "Error occurred, check the logs for details.\n"
+                ),
+                stderr="",
+            )
+        )
+        monkeypatch.setattr("subprocess.run", run)
+
+        template = ComposeTemplate()
+        deployer = StackDeployer(client, template)
+
+        with pytest.raises(DeployFailedError) as exc_info:
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=True)
+
+        message = str(exc_info.value)
+        assert "latest deployment: dep-001" in message
+        assert "Invalid environment variable: environment.INFISICAL_ENCRYPTION_KEY" in message
+        assert run.call_args.args[0] == [
+            "ssh",
+            "deploy-host",
+            "sudo",
+            "tail",
+            "-n",
+            "200",
+            "/etc/dokploy/logs/my-stack/my-stack.log",
+        ]
 
     def test_wait_raises_deploy_timeout_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

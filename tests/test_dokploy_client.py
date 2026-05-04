@@ -248,3 +248,40 @@ class TestDokployClientTransport:
         status = client.get_compose_status("cmp-123")
 
         assert status == "running"
+
+    def test_get_stack_containers_by_app_name_returns_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'[{"name": "app_api.1.abc", "state": "running"}]')
+
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=mock_response))
+
+        result = client.get_stack_containers_by_app_name("my app")
+
+        call_args = urllib.request.urlopen.call_args
+        req = call_args[0][0]
+        assert req.full_url == (
+            "http://test.local/api/docker.getStackContainersByAppName?appName=my+app"
+        )
+        assert result == [{"name": "app_api.1.abc", "state": "running"}]
+
+    def test_get_deployments_by_compose_returns_trpc_json(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = DokployClient()
+
+        mock_response = MockResponse(b'{"result": {"data": {"json": [{"deploymentId": "dep-1"}]}}}')
+
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=mock_response))
+
+        result = client.get_deployments_by_compose("cmp-123")
+
+        assert result == [{"deploymentId": "dep-1"}]

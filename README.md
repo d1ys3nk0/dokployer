@@ -15,6 +15,8 @@ Dokploy.
   placeholders unchanged.
 - Optionally upload a Dokploy env file together with the stack.
 - Optionally poll Dokploy until deploy status becomes `done`.
+- Inspect Dokploy app, services, containers, and deployments through API-only
+  read-only commands.
 
 ## Requirements
 
@@ -23,7 +25,23 @@ Dokploy.
 - These environment variables:
   - `DOKPLOY_URL`
   - `DOKPLOY_API_KEY`
-  - `DOKPLOY_ENVIRONMENT_ID`
+  - `DOKPLOY_ENV_ID`
+
+App targeting:
+
+- `DOKPLOY_APP_ID`
+  - Dokploy `composeId`; wins over environment/name lookup.
+- `DOKPLOY_ENV_ID` + `DOKPLOY_APP_NAME`
+  - Used to resolve the app by name when `DOKPLOY_APP_ID` is not set.
+
+Compatibility aliases:
+
+- `DOKPLOY_ENVIRONMENT_ID` for `DOKPLOY_ENV_ID`
+- `DOKPLOY_APP` for `DOKPLOY_APP_NAME`
+- `DOKPLOY_SERVICE_ID` for `DOKPLOY_APP_ID`
+
+If a canonical variable and its compatibility alias are both set to different
+values, `dokployer` fails with a configuration error.
 
 Optional runtime variables:
 
@@ -31,6 +49,8 @@ Optional runtime variables:
   - Max seconds to wait when `--wait` is used. Default: `300`.
 - `WAIT_INTERVAL`
   - Polling interval in seconds when `--wait` is used. Default: `5`.
+- `DOKPLOY_SSH_HOST`
+  - SSH host for `dokployer logs`. Default: `prod-sts-pl01`.
 
 ## Placeholder Syntax
 
@@ -63,6 +83,12 @@ Run from the workspace:
 uv run dokployer stack-name -f path/to/stack.yml --env path/to/dokploy.env --wait
 ```
 
+Canonical deploy form:
+
+```bash
+uv run dokployer deploy app-name -f path/to/stack.yml --env path/to/dokploy.env --wait
+```
+
 Or install the package and run it directly:
 
 ```bash
@@ -75,6 +101,30 @@ You can also pipe the stack YAML through stdin:
 ```bash
 cat path/to/stack.yml | uv run dokployer stack-name --env path/to/dokploy.env --wait
 ```
+
+Read-only API inspection:
+
+```bash
+uv run dokployer inspect app
+uv run dokployer inspect services
+uv run dokployer inspect containers --running
+uv run dokployer inspect deployments --limit 10
+```
+
+Inspection commands print tab-separated text by default. Add `--json` to print
+JSON.
+
+Inspection commands only use the Dokploy API. They do not use SSH, Docker CLI,
+or log streaming.
+
+Container logs:
+
+```bash
+uv run dokployer logs api --lines 200 --follow
+```
+
+`dokployer logs` uses the Dokploy API to find the running service container,
+then uses SSH to run `sudo docker logs` on the resolved Docker container id.
 
 ## Docker Usage
 
@@ -90,7 +140,8 @@ files so the paths exist inside the container:
 docker run --rm -i \
   -e DOKPLOY_URL \
   -e DOKPLOY_API_KEY \
-  -e DOKPLOY_ENVIRONMENT_ID \
+  -e DOKPLOY_ENV_ID \
+  -e DOKPLOY_APP_NAME \
   -e SERVICE_IMAGE \
   -v "$PWD:$PWD" \
   -w "$PWD" \
@@ -114,7 +165,7 @@ deploy:prd:
     name: ghcr.io/d1ys3nk0/dokployer:latest
     pull_policy: always
   script:
-    - dokployer ${SERVICE_WORLD}-${SERVICE_REALM}-${SERVICE_UNIT} -f .deploy/${SERVICE_UNIT}.stack.yml --env .deploy/_env_prd --wait
+    - dokployer deploy ${SERVICE_WORLD}-${SERVICE_REALM}-${SERVICE_UNIT} -f .deploy/${SERVICE_UNIT}.stack.yml --env .deploy/_env_prd --wait
 ```
 
 Because the image does not override the container entrypoint, CI shells can run
