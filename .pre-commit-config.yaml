@@ -9,7 +9,7 @@ repos:
     hooks:
       - id: mypy-check
         name: mypy check
-        entry: bash -c "cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases"
+        entry: bash -c "cd src && uv run python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases"
         language: system
         pass_filenames: false
         types: [python]

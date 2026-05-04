@@ -1,7 +1,8 @@
 # Dokployer
 
-Dokployer is CLI tool that uploads interpolated Docker Swarm stack files to Dokploy, updates or creates the target compose stack, and optionally waits until deployment
-finishes.
+Dokployer is CLI tool that uploads interpolated Docker Swarm stack files to
+Dokploy, updates or creates the target compose stack, waits until deployment
+finishes, and can optionally verify container readiness.
 
 It is designed for CI/CD usage where the stack YAML and Dokploy env file need
 light templating from the current process environment before they are sent to
@@ -14,7 +15,9 @@ Dokploy.
 - Preserve Dokploy `${{...}}`, Docker Compose `${...}`, and shell `$VAR`
   placeholders unchanged.
 - Optionally upload a Dokploy env file together with the stack.
-- Optionally poll Dokploy until deploy status becomes `done`.
+- Always poll Dokploy until deploy status becomes `done`.
+- Optionally wait until expected stack containers run the image specified in the
+  stack file.
 - Inspect Dokploy app, services, containers, and deployments through API-only
   read-only commands.
 - Uses only the Dokploy HTTP API with `DOKPLOY_API_KEY`; it does not use SSH,
@@ -48,9 +51,24 @@ values, `dokployer` fails with a configuration error.
 Optional runtime variables:
 
 - `WAIT_TIMEOUT`
-  - Max seconds to wait when `--wait` is used. Default: `300`.
+  - Max seconds to wait for Dokploy deploy status. Default: `300`.
 - `WAIT_INTERVAL`
-  - Polling interval in seconds when `--wait` is used. Default: `5`.
+  - Polling interval in seconds for deploy and container readiness checks.
+    Default: `5`.
+
+`--wait` optionally enables container readiness checks after Dokploy reports the
+deploy as `done`:
+
+- `--wait`
+  - Waits up to `60` seconds.
+- `--wait 300`
+  - Waits up to `300` seconds.
+
+Container readiness is API-only. `dokployer` verifies that expected service
+replicas are running with the interpolated `services.<name>.image` value.
+Services used with `--wait` must define `image`; `deploy.mode: global` is not
+supported because the expected replica count cannot be derived without Docker
+node access.
 
 ## Placeholder Syntax
 

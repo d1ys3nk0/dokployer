@@ -304,3 +304,22 @@ class TestDokployClientTransport:
         result = client.get_deployments_by_compose("cmp-123")
 
         assert result == [{"deploymentId": "dep-1"}]
+
+    def test_get_container_config_returns_trpc_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+
+        client = _client()
+
+        mock_response = MockResponse(
+            b'{"result": {"data": {"json": {"Config": {"Image": "app:latest"}}}}}',
+        )
+
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=mock_response))
+
+        result = client.get_container_config("ctr-123")
+
+        call_args = urllib.request.urlopen.call_args
+        req = call_args[0][0]
+        assert req.full_url.startswith("http://test.local/api/trpc/docker.getConfig?input=")
+        assert result == {"Config": {"Image": "app:latest"}}

@@ -232,3 +232,21 @@ class DokployClient:
             return []
         json_data = result_data.get("json")
         return json_data if isinstance(json_data, list) else []
+
+    def get_container_config(self, container_id: str) -> dict[str, object]:
+        """Fetch Docker inspect data for a container through Dokploy."""
+        input_json = json.dumps({"json": {"containerId": container_id}}, separators=(",", ":"))
+        query = urllib.parse.urlencode({"input": input_json})
+        data = self._request(
+            "GET",
+            f"/api/trpc/docker.getConfig?{query}",
+            retry_get=True,
+        )
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return {}
+        result_data = result.get("data")
+        if not isinstance(result_data, dict):
+            return {}
+        json_data = result_data.get("json")
+        return json_data if isinstance(json_data, dict) else {}

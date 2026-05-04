@@ -22,7 +22,7 @@ lint: ## Run Ruff lint checks
 	uv run ruff check .
 
 typecheck: ## Run type checks
-	cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+	cd src && uv run python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
 
 test: ## Run tests
 	uv run pytest
@@ -36,7 +36,7 @@ build: ## Build Python package artifacts
 check: ## Run all project checks
 	uv run ruff check .
 	uv run ruff format --check .
-	cd src && python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+	cd src && uv run python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
 	uv run pytest --cov=src --cov-fail-under=90
 
 docker-build: ## Build the Docker image locally

@@ -55,7 +55,7 @@ def test_main_parses_arguments(
     assert call_args.args[0] == "stack-name"
     assert call_args.kwargs["template_path"] == compose_tmpl
     assert call_args.kwargs["env_template_path"] == env_tmpl
-    assert call_args.kwargs["wait"] is True
+    assert call_args.kwargs["wait"] == 60
 
 
 def test_main_returns_zero_on_success(
@@ -75,6 +75,7 @@ def test_main_returns_zero_on_success(
         )
 
     assert exit_code == 0
+    assert mock_deployer.deploy.call_args.kwargs["wait"] is None
 
 
 def test_main_parses_canonical_deploy_command(
@@ -99,7 +100,30 @@ def test_main_parses_canonical_deploy_command(
     call_args = mock_deployer.deploy.call_args
     assert call_args.args[0] == "app-name"
     assert call_args.kwargs["template_path"] == compose_tmpl
-    assert call_args.kwargs["wait"] is True
+    assert call_args.kwargs["wait"] == 60
+
+
+def test_main_parses_wait_timeout(
+    tmp_path: Path,
+    mock_deployer: MagicMock,
+) -> None:
+    compose_tmpl = tmp_path / "stack.yml"
+    compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+
+    with patch.object(cli_mod, "StackDeployer", return_value=mock_deployer):
+        exit_code = cli_mod.main(
+            [
+                "deploy",
+                "app-name",
+                "-f",
+                str(compose_tmpl),
+                "--wait",
+                "300",
+            ],
+        )
+
+    assert exit_code == 0
+    assert mock_deployer.deploy.call_args.kwargs["wait"] == 300
 
 
 def test_main_parses_inspect_containers_command(capsys: pytest.CaptureFixture[str]) -> None:

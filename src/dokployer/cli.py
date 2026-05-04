@@ -9,11 +9,24 @@ import sys
 from pathlib import Path
 
 from dokployer.config import resolve_config
+from dokployer.constants import DEFAULT_CONTAINER_WAIT_TIMEOUT_SECONDS
 from dokployer.dokploy_client import DokployClient
 from dokployer.errors import DokployerError
 from dokployer.inspector import DokployInspector
 from dokployer.stack_deployer import StackDeployer
 from dokployer.template_manager import ComposeTemplate
+
+
+def _positive_int(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        msg = f"expected a positive integer, got {raw!r}"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if value <= 0:
+        msg = f"expected a positive integer, got {raw!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return value
 
 
 def _configure_logging(*, verbose: bool, quiet: bool) -> None:
@@ -68,8 +81,11 @@ def _add_deploy_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--wait",
-        action="store_true",
-        help="Poll Dokploy until the deploy finishes or times out.",
+        nargs="?",
+        const=DEFAULT_CONTAINER_WAIT_TIMEOUT_SECONDS,
+        type=_positive_int,
+        metavar="SECONDS",
+        help="After deploy finishes, wait for containers to run with the expected image.",
     )
 
 
