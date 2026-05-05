@@ -344,9 +344,9 @@ class StackDeployer:
         except DokployAPIError as exc:
             return service_name, f"{container_id}: inspect failed: {exc}", False
 
-        state = self._container_state(config)
-        health = self._container_health(config)
-        image = self._container_image(config)
+        state = self._container_state(config, container)
+        health = self._container_health(config, container)
+        image = self._container_image(config, container)
         report = (
             f"{container_id}: state={state or 'unknown'} "
             f"health={health or 'n/a'} image={image or 'unknown'}"
@@ -369,31 +369,77 @@ class StackDeployer:
             and _image_matches(expected.image, image)
         )
 
-    def _container_state(self, config: dict[str, object]) -> str | None:
+    def _container_state(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> str | None:
         raw_state = config.get("State")
-        if not isinstance(raw_state, dict):
-            return None
-        status = raw_state.get("Status")
-        return status.lower() if isinstance(status, str) else None
+        if isinstance(raw_state, dict):
+            status = raw_state.get("Status")
+            if isinstance(status, str):
+                return _normalize_container_state(status)
+        if isinstance(raw_state, str):
+            return _normalize_container_state(raw_state)
+        raw_status = config.get("Status")
+        if isinstance(raw_status, dict):
+            state = raw_status.get("State")
+            if isinstance(state, str):
+                return _normalize_container_state(state)
+        for source in (config, container):
+            if source is None:
+                continue
+            for key in ("state", "status", "currentState"):
+                value = source.get(key)
+                if isinstance(value, str) and value:
+                    return _normalize_container_state(value)
+        return None
 
-    def _container_health(self, config: dict[str, object]) -> str | None:
+    def _container_health(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> str | None:
         raw_state = config.get("State")
-        if not isinstance(raw_state, dict):
-            return None
-        raw_health = raw_state.get("Health")
-        if not isinstance(raw_health, dict):
-            return None
-        status = raw_health.get("Status")
-        return status.lower() if isinstance(status, str) else None
+        if isinstance(raw_state, dict):
+            raw_health = raw_state.get("Health")
+            if isinstance(raw_health, dict):
+                status = raw_health.get("Status")
+                if isinstance(status, str):
+                    return status.lower()
+        for source in (config, container):
+            if source is None:
+                continue
+            value = source.get("health")
+            if isinstance(value, str) and value:
+                return value.lower()
+        return None
 
-    def _container_image(self, config: dict[str, object]) -> str | None:
+    def _container_image(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> str | None:
         raw_config = config.get("Config")
         if isinstance(raw_config, dict):
             image = raw_config.get("Image")
             if isinstance(image, str) and image:
                 return image
-        image = config.get("Image")
-        return image if isinstance(image, str) and image else None
+        raw_spec = config.get("Spec")
+        if isinstance(raw_spec, dict):
+            raw_container_spec = raw_spec.get("ContainerSpec")
+            if isinstance(raw_container_spec, dict):
+                image = raw_container_spec.get("Image")
+                if isinstance(image, str) and image:
+                    return image
+        for source in (config, container):
+            if source is None:
+                continue
+            for key in ("Image", "image", "imageName"):
+                image = source.get(key)
+                if isinstance(image, str) and image:
+                    return image
+        return None
 
     def deploy(
         self,
@@ -479,6 +525,10 @@ def _service_name_from_container(container_name: str) -> str:
 
 def _image_matches(expected: str, observed: str) -> bool:
     return observed == expected or observed.startswith(f"{expected}@sha256:")
+
+
+def _normalize_container_state(value: str) -> str:
+    return value.strip().split(maxsplit=1)[0].lower()
 
 
 _SCOPED_CONTAINER_PARTS = 2

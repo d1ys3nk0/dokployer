@@ -684,6 +684,86 @@ services:
 
         client.get_stack_containers_by_app_name.assert_called_once_with("my-stack")
 
+    def test_container_wait_uses_list_record_when_inspect_is_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_TIMEOUT", "300")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text(
+            "version: '3'\nservices:\n  app:\n    image: myimage:latest\n",
+            encoding="utf-8",
+        )
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        _successful_deploy_status(client)
+        client.get_stack_containers_by_app_name.return_value = [
+            {
+                "containerId": "task-1",
+                "name": "my-stack_app.1.abc",
+                "state": "running",
+                "image": "myimage:latest",
+            }
+        ]
+        client.get_container_config.return_value = {}
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=60)
+
+        client.get_container_config.assert_called_once_with("task-1")
+
+    def test_container_wait_supports_swarm_task_inspect_shape(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_TIMEOUT", "300")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text(
+            "version: '3'\nservices:\n  app:\n    image: myimage:latest\n",
+            encoding="utf-8",
+        )
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        _successful_deploy_status(client)
+        client.get_stack_containers_by_app_name.return_value = [
+            {"containerId": "task-1", "name": "my-stack_app.1.abc"}
+        ]
+        client.get_container_config.return_value = {
+            "Status": {"State": "running"},
+            "Spec": {"ContainerSpec": {"Image": "myimage:latest@sha256:abc"}},
+        }
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with CaplogForDeployer(deployer):
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=60)
+
+        client.get_container_config.assert_called_once_with("task-1")
+
     def test_container_wait_prefers_runtime_app_name_after_environment_lookup(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1013,6 +1093,13 @@ services:
         assert deployer._container_state({}) is None
         assert deployer._container_health({}) is None
         assert deployer._container_image({"Image": "sha256:abc"}) == "sha256:abc"
+        assert deployer._container_state({}, {"currentState": "Running 2 minutes ago"}) == "running"
+        assert deployer._container_image({}, {"imageName": "app:latest"}) == "app:latest"
+        assert deployer._container_state({"Status": {"State": "running"}}) == "running"
+        assert (
+            deployer._container_image({"Spec": {"ContainerSpec": {"Image": "app:latest"}}})
+            == "app:latest"
+        )
 
 
 class CaplogForDeployer:
