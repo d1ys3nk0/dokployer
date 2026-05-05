@@ -51,6 +51,25 @@ class ExpectedService:
     replicas: int
 
 
+@dataclass(frozen=True, slots=True)
+class ContainerDiagnostic:
+    """Container state derived from Dokploy list and Docker inspect data."""
+
+    service_name: str
+    name: str
+    container_id: str | None
+    state: str | None
+    health: str | None
+    image: str | None
+    created_at: str | None
+    started_at: str | None
+    stopped_at: str | None
+    healthcheck: str | None
+    health_logs: list[str]
+    inspect_error: str | None
+    ready: bool
+
+
 class StackDeployer:
     """Orchestrates compose template interpolation and deployment via DokployClient."""
 
@@ -267,45 +286,49 @@ class StackDeployer:
         deadline = time.monotonic() + timeout
         interval = self._wait_value(STACK_POLL_INTERVAL, DEFAULT_STACK_POLL_INTERVAL_SECONDS)
         last_report = "container status: not checked"
+        last_summary = self._container_summary([])
 
         while time.monotonic() < deadline:
             containers = self._client.get_stack_containers_by_app_name(app_name)
-            ready, report = self._containers_ready(containers, expected_services)
+            ready, report, summary = self._containers_ready(containers, expected_services)
             last_report = report
+            last_summary = summary
             if ready:
                 logger.info("Containers OK: %s", app_name)
+                logger.info("%s", summary)
                 return
             logger.info("containers not ready: %s", report)
             time.sleep(interval)
 
-        msg = f"container readiness timed out after {timeout}s: {app_name}\n{last_report}"
+        msg = (
+            f"container readiness timed out after {timeout}s: {app_name}\n"
+            f"{last_report}\n{last_summary}"
+        )
         raise DeployTimeoutError(msg)
 
     def _containers_ready(
         self,
         containers: list[object],
         expected_services: list[ExpectedService],
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, str]:
         observed: dict[str, list[str]] = {service.name: [] for service in expected_services}
         ready_counts = {service.name: 0 for service in expected_services}
         expected_by_name = {service.name: service for service in expected_services}
+        diagnostics = self._container_diagnostics(containers, expected_by_name)
 
-        for container in containers:
-            observation = self._container_readiness_observation(container, expected_by_name)
-            if observation is None:
-                continue
-            service_name, report, ready = observation
-            observed[service_name].append(report)
-            if ready:
-                ready_counts[service_name] += 1
+        for diagnostic in diagnostics:
+            observed[diagnostic.service_name].append(self._container_readiness_report(diagnostic))
+            if diagnostic.ready:
+                ready_counts[diagnostic.service_name] += 1
 
         missing = [
             f"{service.name} {ready_counts[service.name]}/{service.replicas}"
             for service in expected_services
             if ready_counts[service.name] < service.replicas
         ]
+        summary = self._container_summary(diagnostics)
         if not missing:
-            return True, "all expected containers are ready"
+            return True, "all expected containers are ready", summary
 
         details = []
         for service in expected_services:
@@ -314,13 +337,26 @@ class StackDeployer:
                 details.append(f"{service.name}: {'; '.join(service_observed)}")
             else:
                 details.append(f"{service.name}: no containers observed")
-        return False, f"missing ready replicas: {', '.join(missing)}; {' | '.join(details)}"
+        report = f"missing ready replicas: {', '.join(missing)}; {' | '.join(details)}"
+        return False, report, summary
 
-    def _container_readiness_observation(
+    def _container_diagnostics(
+        self,
+        containers: list[object],
+        expected_by_name: dict[str, ExpectedService],
+    ) -> list[ContainerDiagnostic]:
+        diagnostics = []
+        for container in containers:
+            diagnostic = self._container_diagnostic(container, expected_by_name)
+            if diagnostic is not None:
+                diagnostics.append(diagnostic)
+        return diagnostics
+
+    def _container_diagnostic(
         self,
         container: object,
         expected_by_name: dict[str, ExpectedService],
-    ) -> tuple[str, str, bool] | None:
+    ) -> ContainerDiagnostic | None:
         if not isinstance(container, dict):
             return None
         name = container.get("name")
@@ -337,22 +373,100 @@ class StackDeployer:
             or not container_id
             or container_id == "No container id"
         ):
-            return service_name, "missing container id", False
+            return ContainerDiagnostic(
+                service_name=service_name,
+                name=name,
+                container_id=None,
+                state=self._container_state({}, container),
+                health=self._container_health({}, container),
+                image=self._container_image({}, container),
+                created_at=self._container_created_at({}, container),
+                started_at=self._container_started_at({}, container),
+                stopped_at=self._container_stopped_at({}, container),
+                healthcheck=None,
+                health_logs=[],
+                inspect_error="missing container id",
+                ready=False,
+            )
 
         try:
             config = self._client.get_container_config(container_id)
         except DokployAPIError as exc:
-            return service_name, f"{container_id}: inspect failed: {exc}", False
+            return ContainerDiagnostic(
+                service_name=service_name,
+                name=name,
+                container_id=container_id,
+                state=self._container_state({}, container),
+                health=self._container_health({}, container),
+                image=self._container_image({}, container),
+                created_at=self._container_created_at({}, container),
+                started_at=self._container_started_at({}, container),
+                stopped_at=self._container_stopped_at({}, container),
+                healthcheck=None,
+                health_logs=[],
+                inspect_error=f"inspect failed: {exc}",
+                ready=False,
+            )
 
         state = self._container_state(config, container)
         health = self._container_health(config, container)
         image = self._container_image(config, container)
-        report = (
-            f"{container_id}: state={state or 'unknown'} "
-            f"health={health or 'n/a'} image={image or 'unknown'}"
-        )
         ready = self._container_matches(expected, state=state, health=health, image=image)
-        return service_name, report, ready
+        return ContainerDiagnostic(
+            service_name=service_name,
+            name=name,
+            container_id=container_id,
+            state=state,
+            health=health,
+            image=image,
+            created_at=self._container_created_at(config, container),
+            started_at=self._container_started_at(config, container),
+            stopped_at=self._container_stopped_at(config, container),
+            healthcheck=self._container_healthcheck(config),
+            health_logs=self._container_health_logs(config),
+            inspect_error=None,
+            ready=ready,
+        )
+
+    def _container_readiness_report(self, diagnostic: ContainerDiagnostic) -> str:
+        container_id = diagnostic.container_id or "missing container id"
+        parts = [
+            f"{container_id}: state={diagnostic.state or 'unknown'}",
+            f"health={diagnostic.health or 'n/a'}",
+            f"image={diagnostic.image or 'unknown'}",
+        ]
+        if diagnostic.inspect_error is not None:
+            parts.append(diagnostic.inspect_error)
+        return " ".join(parts)
+
+    def _container_summary(self, diagnostics: list[ContainerDiagnostic]) -> str:
+        lines = ["Container summary:"]
+        if not diagnostics:
+            lines.append("  no matching containers observed")
+            return "\n".join(lines)
+
+        for diagnostic in sorted(diagnostics, key=_container_sort_key):
+            lines.append(f"  service: {diagnostic.service_name}")
+            lines.append(f"    container id: {diagnostic.container_id or 'missing'}")
+            lines.append(f"    name: {diagnostic.name}")
+            lines.append(f"    image: {diagnostic.image or 'unknown'}")
+            lines.append(f"    state: {diagnostic.state or 'unknown'}")
+            if diagnostic.started_at is not None:
+                lines.append(f"    started: {diagnostic.started_at}")
+            if diagnostic.stopped_at is not None:
+                lines.append(f"    stopped: {diagnostic.stopped_at}")
+            if diagnostic.created_at is not None:
+                lines.append(f"    created: {diagnostic.created_at}")
+            if diagnostic.health is not None:
+                lines.append(f"    health: {diagnostic.health}")
+            if diagnostic.healthcheck is not None:
+                lines.append(f"    healthcheck: {diagnostic.healthcheck}")
+            if diagnostic.health_logs:
+                lines.append("    healthcheck logs:")
+                lines.extend(f"      {entry}" for entry in diagnostic.health_logs)
+            if diagnostic.inspect_error is not None:
+                lines.append(f"    inspect: {diagnostic.inspect_error}")
+        return "\n".join(lines)
 
     def _container_matches(
         self,
@@ -414,6 +528,143 @@ class StackDeployer:
             if isinstance(value, str) and value:
                 return value.lower()
         return None
+
+    def _container_created_at(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> str | None:
+        for source in (config, container):
+            if source is None:
+                continue
+            value = source.get("Created") or source.get("created") or source.get("createdAt")
+            if isinstance(value, str) and _is_meaningful_timestamp(value):
+                return value
+        return None
+
+    def _container_started_at(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> str | None:
+        raw_state = config.get("State")
+        if isinstance(raw_state, dict):
+            started_at = raw_state.get("StartedAt")
+            if isinstance(started_at, str) and _is_meaningful_timestamp(started_at):
+                return started_at
+        raw_status = config.get("Status")
+        if isinstance(raw_status, dict):
+            for key in ("StartedAt", "StartTime", "Started", "Timestamp"):
+                timestamp = raw_status.get(key)
+                if isinstance(timestamp, str) and _is_meaningful_timestamp(timestamp):
+                    return timestamp
+        for source in (config, container):
+            if source is None:
+                continue
+            value = (
+                source.get("startedAt")
+                or source.get("StartedAt")
+                or source.get("startTime")
+                or source.get("StartTime")
+            )
+            if isinstance(value, str) and _is_meaningful_timestamp(value):
+                return value
+        return None
+
+    def _container_stopped_at(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> str | None:
+        raw_state = config.get("State")
+        if isinstance(raw_state, dict):
+            finished_at = raw_state.get("FinishedAt")
+            if isinstance(finished_at, str) and _is_meaningful_timestamp(finished_at):
+                return finished_at
+        raw_status = config.get("Status")
+        if isinstance(raw_status, dict):
+            timestamp = raw_status.get("Timestamp")
+            state = self._container_state(config, container)
+            if (
+                state not in {None, "running"}
+                and isinstance(timestamp, str)
+                and _is_meaningful_timestamp(timestamp)
+            ):
+                return timestamp
+        for source in (config, container):
+            if source is None:
+                continue
+            value = source.get("finishedAt") or source.get("stoppedAt")
+            if isinstance(value, str) and _is_meaningful_timestamp(value):
+                return value
+        return None
+
+    def _container_healthcheck(self, config: dict[str, object]) -> str | None:
+        raw_config = config.get("Config")
+        if not isinstance(raw_config, dict):
+            return None
+        raw_healthcheck = raw_config.get("Healthcheck")
+        if not isinstance(raw_healthcheck, dict):
+            return None
+
+        parts = []
+        test = raw_healthcheck.get("Test")
+        if isinstance(test, list):
+            test_value = " ".join(str(part) for part in test)
+            if test_value:
+                parts.append(f"test={test_value}")
+        elif isinstance(test, str) and test:
+            parts.append(f"test={test}")
+
+        field_names = {
+            "Interval": "interval",
+            "Timeout": "timeout",
+            "Retries": "retries",
+            "StartPeriod": "start_period",
+        }
+        for raw_name, display_name in field_names.items():
+            value = raw_healthcheck.get(raw_name)
+            if isinstance(value, str | int | float) and not isinstance(value, bool):
+                parts.append(f"{display_name}={value}")
+
+        return " ".join(parts) if parts else None
+
+    def _container_health_logs(self, config: dict[str, object]) -> list[str]:
+        raw_state = config.get("State")
+        if not isinstance(raw_state, dict):
+            return []
+        raw_health = raw_state.get("Health")
+        if not isinstance(raw_health, dict):
+            return []
+        raw_logs = raw_health.get("Log")
+        if not isinstance(raw_logs, list):
+            return []
+
+        logs = []
+        for raw_entry in raw_logs[-3:]:
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = self._container_health_log_entry(raw_entry)
+            if entry is not None:
+                logs.append(entry)
+        return logs
+
+    def _container_health_log_entry(self, raw_entry: dict[str, object]) -> str | None:
+        output = raw_entry.get("Output")
+        exit_code = raw_entry.get("ExitCode")
+        start = raw_entry.get("Start")
+        end = raw_entry.get("End")
+        parts = []
+        if isinstance(exit_code, int):
+            parts.append(f"exit={exit_code}")
+        if isinstance(start, str) and start:
+            parts.append(f"start={start}")
+        if isinstance(end, str) and end:
+            parts.append(f"end={end}")
+        if isinstance(output, str) and output:
+            output_text = " ".join(output.split())
+            parts.append(f"output={output_text}")
+        return " ".join(parts) if parts else None
 
     def _container_image(
         self,
@@ -511,10 +762,54 @@ class StackDeployer:
         self._client.deploy_compose(compose_id)
 
         logger.info("compose.deploy accepted for %s (%s)", compose_id, app_name)
-        self._wait_for_deploy(compose_id, app_name, previous_deployment_id)
+        self._wait_for_deploy_with_container_summary(
+            compose_id=compose_id,
+            app_name=app_name,
+            stack_name=stack_name,
+            previous_deployment_id=previous_deployment_id,
+            expected_services=expected_services,
+        )
         if wait_timeout is not None and expected_services is not None:
             container_app_name = self._compose_app_name(stack_name, compose_id)
             self._wait_for_containers(container_app_name, expected_services, wait_timeout)
+
+    def _wait_for_deploy_with_container_summary(
+        self,
+        *,
+        compose_id: str,
+        app_name: str,
+        stack_name: str | None,
+        previous_deployment_id: str | None,
+        expected_services: list[ExpectedService] | None,
+    ) -> None:
+        try:
+            self._wait_for_deploy(compose_id, app_name, previous_deployment_id)
+        except DeployFailedError as exc:
+            if expected_services is None:
+                raise
+            raise DeployFailedError(
+                self._message_with_best_effort_container_summary(
+                    str(exc),
+                    stack_name,
+                    compose_id,
+                    expected_services,
+                ),
+            ) from exc
+
+    def _message_with_best_effort_container_summary(
+        self,
+        message: str,
+        stack_name: str | None,
+        compose_id: str,
+        expected_services: list[ExpectedService],
+    ) -> str:
+        try:
+            app_name = self._compose_app_name(stack_name, compose_id)
+            containers = self._client.get_stack_containers_by_app_name(app_name)
+            _, _, summary = self._containers_ready(containers, expected_services)
+        except (ConfigurationError, DokployAPIError) as exc:
+            summary = f"Container summary:\n  unavailable: {exc}"
+        return f"{message}\n{summary}"
 
 
 def _service_name_from_container(container_name: str) -> str:
@@ -529,6 +824,16 @@ def _image_matches(expected: str, observed: str) -> bool:
 
 def _normalize_container_state(value: str) -> str:
     return value.strip().split(maxsplit=1)[0].lower()
+
+
+def _is_meaningful_timestamp(value: str) -> bool:
+    stripped = value.strip()
+    return bool(stripped) and not stripped.startswith("0001-01-01T00:00:00")
+
+
+def _container_sort_key(diagnostic: ContainerDiagnostic) -> tuple[str, str, str]:
+    timestamp = diagnostic.started_at or diagnostic.created_at or diagnostic.stopped_at or ""
+    return timestamp, diagnostic.name, diagnostic.container_id or ""
 
 
 _SCOPED_CONTAINER_PARTS = 2
