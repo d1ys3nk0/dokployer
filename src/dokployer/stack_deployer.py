@@ -554,7 +554,7 @@ class StackDeployer:
                 return started_at
         raw_status = config.get("Status")
         if isinstance(raw_status, dict):
-            for key in ("StartedAt", "StartTime", "Started", "Timestamp"):
+            for key in ("StartedAt", "StartTime", "Started"):
                 timestamp = raw_status.get(key)
                 if isinstance(timestamp, str) and _is_meaningful_timestamp(timestamp):
                     return timestamp
@@ -831,9 +831,9 @@ def _is_meaningful_timestamp(value: str) -> bool:
     return bool(stripped) and not stripped.startswith("0001-01-01T00:00:00")
 
 
-def _container_sort_key(diagnostic: ContainerDiagnostic) -> tuple[str, str, str]:
+def _container_sort_key(diagnostic: ContainerDiagnostic) -> tuple[bool, str, str, str]:
     timestamp = diagnostic.started_at or diagnostic.created_at or diagnostic.stopped_at or ""
-    return timestamp, diagnostic.name, diagnostic.container_id or ""
+    return not timestamp, timestamp, diagnostic.name, diagnostic.container_id or ""
 
 
 _SCOPED_CONTAINER_PARTS = 2

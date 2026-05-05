@@ -745,6 +745,67 @@ services:
 
         assert summary.index("container id: ctr-old") < summary.index("container id: ctr-new")
 
+    def test_container_summary_sorts_unknown_dates_after_dated_containers(self) -> None:
+        client = MagicMock()
+        template = ComposeTemplate()
+        deployer = StackDeployer(
+            client,
+            template,
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
+        diagnostics = [
+            ContainerDiagnostic(
+                service_name="xray",
+                name="sip-prd-xray-wuo10s_xray.1",
+                container_id="ctr-running",
+                state="running",
+                health=None,
+                image="teddysun/xray:26.4.13",
+                created_at=None,
+                started_at=None,
+                stopped_at=None,
+                healthcheck=None,
+                health_logs=[],
+                inspect_error=None,
+                ready=True,
+            ),
+            ContainerDiagnostic(
+                service_name="xray",
+                name="sip-prd-xray-wuo10s_xray.1",
+                container_id="ctr-new",
+                state="shutdown",
+                health=None,
+                image="teddysun/xray:26.4.13",
+                created_at=None,
+                started_at=None,
+                stopped_at="2026-05-04T14:33:20.808619122Z",
+                healthcheck=None,
+                health_logs=[],
+                inspect_error=None,
+                ready=False,
+            ),
+            ContainerDiagnostic(
+                service_name="xray",
+                name="sip-prd-xray-wuo10s_xray.1",
+                container_id="ctr-old",
+                state="shutdown",
+                health=None,
+                image="teddysun/xray:latest",
+                created_at=None,
+                started_at=None,
+                stopped_at="2026-04-16T12:28:24.696677992Z",
+                healthcheck=None,
+                health_logs=[],
+                inspect_error=None,
+                ready=False,
+            ),
+        ]
+
+        summary = deployer._container_summary(diagnostics)
+
+        assert summary.index("container id: ctr-old") < summary.index("container id: ctr-new")
+        assert summary.index("container id: ctr-new") < summary.index("container id: ctr-running")
+
     def test_container_summary_orders_fields_and_keeps_stopped_start_time(self) -> None:
         client = MagicMock()
         template = ComposeTemplate()
@@ -1287,6 +1348,9 @@ services:
             )
             == "2026-05-05T11:00:00Z"
         )
+        shutdown_task = {"Status": {"State": "shutdown", "Timestamp": "2026-05-05T11:30:00Z"}}
+        assert deployer._container_started_at(shutdown_task) is None
+        assert deployer._container_stopped_at(shutdown_task) == "2026-05-05T11:30:00Z"
 
     def test_deploy_failure_appends_best_effort_container_summary(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
