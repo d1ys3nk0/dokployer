@@ -49,13 +49,13 @@ class DokployInspector:
         self._config = config
         self._app_cache: dict[str | None, ResolvedApp] = {}
 
-    def _compose_name(self, compose: dict[str, object]) -> str | None:
-        name = compose.get("name")
-        if isinstance(name, str) and name:
-            return name
+    def _runtime_app_name(self, compose: dict[str, object]) -> str | None:
         app_name = compose.get("appName")
         if isinstance(app_name, str) and app_name:
             return app_name
+        name = compose.get("name")
+        if isinstance(name, str) and name:
+            return name
         return None
 
     def _resolve_app(self, app_name: str | None = None) -> ResolvedApp:
@@ -67,7 +67,7 @@ class DokployInspector:
             compose = self._client.get_compose(config.app_id)
             resolved = ResolvedApp(
                 compose_id=config.app_id,
-                app_name=app_name or self._compose_name(compose) or config.app_name,
+                app_name=app_name or self._runtime_app_name(compose) or config.app_name,
             )
             self._app_cache[app_name] = resolved
             return resolved
@@ -84,9 +84,10 @@ class DokployInspector:
         env_resp = parse_environment_response(env_data)
         for compose_summary in env_resp.compose:
             if compose_summary.name == target_name:
+                compose = self._client.get_compose(compose_summary.compose_id)
                 resolved = ResolvedApp(
                     compose_id=compose_summary.compose_id,
-                    app_name=target_name,
+                    app_name=self._runtime_app_name(compose) or target_name,
                 )
                 self._app_cache[app_name] = resolved
                 return resolved

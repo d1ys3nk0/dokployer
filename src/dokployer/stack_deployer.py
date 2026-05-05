@@ -244,16 +244,14 @@ class StackDeployer:
 
     def _compose_app_name(self, stack_name: str | None, compose_id: str) -> str:
         app_name = stack_name or self._config.app_name
-        if app_name is not None and self._config.app_id is None:
-            return app_name
 
         compose = self._client.get_compose(compose_id)
-        name = compose.get("name")
-        if isinstance(name, str) and name:
-            return name
         compose_app_name = compose.get("appName")
         if isinstance(compose_app_name, str) and compose_app_name:
             return compose_app_name
+        name = compose.get("name")
+        if isinstance(name, str) and name:
+            return name
         if app_name is not None:
             return app_name
 

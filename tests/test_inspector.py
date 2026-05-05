@@ -28,7 +28,8 @@ def test_inspector_resolves_app_by_env_and_name(monkeypatch: pytest.MonkeyPatch)
     inspector = _inspector(client)
 
     assert inspector.app() == {"composeId": "cmp-001", "name": "my-app"}
-    client.get_compose.assert_called_once_with("cmp-001")
+    assert client.get_compose.call_count == 2
+    client.get_compose.assert_called_with("cmp-001")
 
 
 def test_inspector_app_id_wins_over_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,6 +83,27 @@ def test_inspector_uses_compose_app_name_when_name_missing(
     client.get_stack_containers_by_app_name.assert_called_once_with("my-app")
 
 
+def test_inspector_prefers_runtime_app_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+    monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
+
+    client = MagicMock()
+    client.get_compose.return_value = {
+        "composeId": "cmp-direct",
+        "name": "friendly-name",
+        "appName": "runtime-stack",
+    }
+    client.get_stack_containers_by_app_name.return_value = []
+
+    inspector = _inspector(client)
+
+    assert inspector.containers() == []
+    client.get_stack_containers_by_app_name.assert_called_once_with("runtime-stack")
+
+
 def test_inspector_requires_app_name_for_app_id_containers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -131,7 +153,32 @@ def test_inspector_services_resolves_env_target_once(monkeypatch: pytest.MonkeyP
 
     assert inspector.services() == [{"name": "api"}]
     client.get_environment.assert_called_once_with("env-001")
-    client.get_compose.assert_not_called()
+    client.get_compose.assert_called_once_with("cmp-001")
+
+
+def test_inspector_prefers_runtime_app_name_after_environment_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+    monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+    monkeypatch.setenv("DOKPLOY_APP_NAME", "friendly-name")
+
+    client = MagicMock()
+    client.get_environment.return_value = {
+        "compose": [{"name": "friendly-name", "composeId": "cmp-001"}]
+    }
+    client.get_compose.return_value = {
+        "composeId": "cmp-001",
+        "name": "friendly-name",
+        "appName": "runtime-stack",
+    }
+    client.get_stack_containers_by_app_name.return_value = [{"name": "runtime-stack_api.1.abc"}]
+
+    inspector = _inspector(client)
+
+    assert inspector.services() == [{"name": "api"}]
+    client.get_stack_containers_by_app_name.assert_called_once_with("runtime-stack")
 
 
 def test_inspector_deployments_honors_limit(monkeypatch: pytest.MonkeyPatch) -> None:
