@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 MAX_UNKNOWN_STATUS_POLLS = 3
 StackWait = int | Literal[True] | None
+ServiceReadinessMode = Literal["running", "completed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,7 @@ class ExpectedService:
     name: str
     image: str
     replicas: int
+    mode: ServiceReadinessMode = "running"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,7 @@ class ContainerDiagnostic:
     health_logs: list[str]
     inspect_error: str | None
     ready: bool
+    exit_code: int | None = None
 
 
 class StackDeployer:
@@ -198,9 +201,25 @@ class StackDeployer:
                 raise ConfigurationError(msg)
             replicas = self._replica_count(raw_name, deploy.get("replicas", 1))
             if replicas > 0:
-                expected.append(ExpectedService(name=raw_name, image=image, replicas=replicas))
+                expected.append(
+                    ExpectedService(
+                        name=raw_name,
+                        image=image,
+                        replicas=replicas,
+                        mode=self._service_readiness_mode(deploy),
+                    ),
+                )
 
         return expected
+
+    def _service_readiness_mode(self, deploy: dict[object, object]) -> ServiceReadinessMode:
+        restart_policy = deploy.get("restart_policy")
+        if not isinstance(restart_policy, dict):
+            return "running"
+        condition = restart_policy.get("condition")
+        if isinstance(condition, str) and condition.strip().lower() == "none":
+            return "completed"
+        return "running"
 
     def _replica_count(self, service_name: str, raw_replicas: object) -> int:
         if isinstance(raw_replicas, bool) or not isinstance(raw_replicas, int):
@@ -387,6 +406,7 @@ class StackDeployer:
                 health_logs=[],
                 inspect_error="missing container id",
                 ready=False,
+                exit_code=self._container_exit_code({}, container),
             )
 
         try:
@@ -406,12 +426,20 @@ class StackDeployer:
                 health_logs=[],
                 inspect_error=f"inspect failed: {exc}",
                 ready=False,
+                exit_code=self._container_exit_code({}, container),
             )
 
         state = self._container_state(config, container)
         health = self._container_health(config, container)
         image = self._container_image(config, container)
-        ready = self._container_matches(expected, state=state, health=health, image=image)
+        exit_code = self._container_exit_code(config, container)
+        ready = self._container_matches(
+            expected,
+            state=state,
+            health=health,
+            image=image,
+            exit_code=exit_code,
+        )
         return ContainerDiagnostic(
             service_name=service_name,
             name=name,
@@ -426,6 +454,7 @@ class StackDeployer:
             health_logs=self._container_health_logs(config),
             inspect_error=None,
             ready=ready,
+            exit_code=exit_code,
         )
 
     def _container_readiness_report(self, diagnostic: ContainerDiagnostic) -> str:
@@ -435,6 +464,8 @@ class StackDeployer:
             f"health={diagnostic.health or 'n/a'}",
             f"image={diagnostic.image or 'unknown'}",
         ]
+        if diagnostic.exit_code is not None:
+            parts.append(f"exit={diagnostic.exit_code}")
         if diagnostic.inspect_error is not None:
             parts.append(diagnostic.inspect_error)
         return " ".join(parts)
@@ -451,6 +482,7 @@ class StackDeployer:
             lines.append(f"    name: {diagnostic.name}")
             lines.append(f"    image: {diagnostic.image or 'unknown'}")
             lines.append(f"    state: {diagnostic.state or 'unknown'}")
+            lines.extend(_exit_code_summary_lines(diagnostic.exit_code))
             if diagnostic.started_at is not None:
                 lines.append(f"    started: {diagnostic.started_at}")
             if diagnostic.stopped_at is not None:
@@ -475,13 +507,13 @@ class StackDeployer:
         state: str | None,
         health: str | None,
         image: str | None,
+        exit_code: int | None,
     ) -> bool:
-        return (
-            state == "running"
-            and (health is None or health == "healthy")
-            and image is not None
-            and _image_matches(expected.image, image)
-        )
+        if image is None or not _image_matches(expected.image, image):
+            return False
+        if expected.mode == "completed":
+            return state == "complete" or (state == "exited" and exit_code == 0)
+        return state == "running" and (health is None or health == "healthy")
 
     def _container_state(
         self,
@@ -527,6 +559,25 @@ class StackDeployer:
             value = source.get("health")
             if isinstance(value, str) and value:
                 return value.lower()
+        return None
+
+    def _container_exit_code(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> int | None:
+        raw_status = config.get("Status")
+        sources = (
+            (config.get("State"), ("ExitCode",)),
+            (raw_status, ("ExitCode",)),
+            (_container_status(raw_status), ("ExitCode",)),
+            (config, ("ExitCode", "exitCode")),
+            (container, ("ExitCode", "exitCode")),
+        )
+        for source, keys in sources:
+            exit_code = _exit_code_from(source, keys)
+            if exit_code is not None:
+                return exit_code
         return None
 
     def _container_created_at(
@@ -829,6 +880,28 @@ def _normalize_container_state(value: str) -> str:
 def _is_meaningful_timestamp(value: str) -> bool:
     stripped = value.strip()
     return bool(stripped) and not stripped.startswith("0001-01-01T00:00:00")
+
+
+def _container_status(raw_status: object) -> object:
+    if not isinstance(raw_status, dict):
+        return None
+    return raw_status.get("ContainerStatus")
+
+
+def _exit_code_from(source: object, keys: tuple[str, ...]) -> int | None:
+    if not isinstance(source, dict):
+        return None
+    for key in keys:
+        exit_code = source.get(key)
+        if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+            return exit_code
+    return None
+
+
+def _exit_code_summary_lines(exit_code: int | None) -> list[str]:
+    if exit_code is None:
+        return []
+    return [f"    exit code: {exit_code}"]
 
 
 def _container_sort_key(diagnostic: ContainerDiagnostic) -> tuple[bool, str, str, str]:

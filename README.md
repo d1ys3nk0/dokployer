@@ -16,8 +16,7 @@ Dokploy.
   placeholders unchanged.
 - Optionally upload a Dokploy env file together with the stack.
 - Always poll Dokploy until deploy status becomes `done`.
-- Optionally wait until expected stack containers run the image specified in the
-  stack file.
+- Optionally wait until expected stack containers run the image specified in the stack file, or one-shot services complete successfully.
 - Inspect Dokploy app, services, containers, and deployments through API-only
   read-only commands.
 - Uses only the Dokploy HTTP API with `DOKPLOY_API_KEY`; it does not use SSH,
@@ -59,11 +58,9 @@ deploy as `done`:
 - `--wait 300`
   - Waits up to `300` seconds.
 
-Container readiness is API-only. `dokployer` verifies that expected service
-replicas are running with the interpolated `services.<name>.image` value.
-Services used with `--wait` must define `image`; `deploy.mode: global` is not
-supported because the expected replica count cannot be derived without Docker
-node access.
+Container readiness is API-only. `dokployer` verifies that expected normal service replicas are running with the interpolated `services.<name>.image` value. Services with `deploy.restart_policy.condition: none` are treated as one-shot jobs and are ready after a successful terminal state: Docker Swarm `complete`, or Docker `exited` with exit code `0` when inspect exposes the exit code.
+
+Services used with `--wait` must define `image`; `deploy.mode: global` is not supported because the expected replica count cannot be derived without Docker node access.
 
 ## Placeholder Syntax
 

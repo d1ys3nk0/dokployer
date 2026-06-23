@@ -700,6 +700,122 @@ services:
         assert "not configured" not in logs
         assert "unavailable" not in logs
 
+    def test_container_wait_succeeds_for_completed_restart_policy_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        monkeypatch.setenv("DEPLOY_POLL_TIMEOUT", "10")
+        monkeypatch.setenv("DEPLOY_POLL_INTERVAL", "1")
+        monkeypatch.setenv("STACK_POLL_INTERVAL", "1")
+        _fast_wait_clock(monkeypatch)
+
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text(
+            """version: '3'
+services:
+  pg-init:
+    image: alpine/psql:18.4
+    deploy:
+      restart_policy:
+        condition: none
+  app:
+    image: myimage:latest
+""",
+            encoding="utf-8",
+        )
+
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        _successful_deploy_status(client)
+        client.get_stack_containers_by_app_name.return_value = [
+            {"containerId": "ctr-init", "name": "my-stack_pg-init.1.abc"},
+            {"containerId": "ctr-app", "name": "my-stack_app.1.def"},
+        ]
+        client.get_container_config.side_effect = [
+            {
+                "State": {"Status": "complete"},
+                "Config": {"Image": "alpine/psql:18.4@sha256:abc"},
+            },
+            {
+                "State": {"Status": "running"},
+                "Config": {"Image": "myimage:latest"},
+            },
+        ]
+
+        template = ComposeTemplate()
+        deployer = _deployer(client, template)
+
+        with CaplogForDeployer(deployer) as handler:
+            deployer.deploy("my-stack", template_path=compose_tmpl, wait=60)
+
+        logs = handler.messages()
+        assert "Containers OK: my-stack" in logs
+        assert "service: pg-init" in logs
+        assert "state: complete" in logs
+
+    def test_completed_service_allows_exited_zero(self) -> None:
+        client = MagicMock()
+        client.get_container_config.return_value = {
+            "State": {"Status": "exited", "ExitCode": 0},
+            "Config": {"Image": "alpine/psql:18.4"},
+        }
+        template = ComposeTemplate()
+        deployer = StackDeployer(
+            client,
+            template,
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
+
+        ready, report, summary = deployer._containers_ready(
+            [{"name": "my-stack_pg-init.1.abc", "containerId": "ctr-init"}],
+            [
+                ExpectedService(
+                    name="pg-init",
+                    image="alpine/psql:18.4",
+                    replicas=1,
+                    mode="completed",
+                ),
+            ],
+        )
+
+        assert ready is True
+        assert report == "all expected containers are ready"
+        assert "exit code: 0" in summary
+
+    def test_completed_service_rejects_exited_nonzero(self) -> None:
+        client = MagicMock()
+        client.get_container_config.return_value = {
+            "State": {"Status": "exited", "ExitCode": 1},
+            "Config": {"Image": "alpine/psql:18.4"},
+        }
+        template = ComposeTemplate()
+        deployer = StackDeployer(
+            client,
+            template,
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
+
+        ready, report, summary = deployer._containers_ready(
+            [{"name": "my-stack_pg-init.1.abc", "containerId": "ctr-init"}],
+            [
+                ExpectedService(
+                    name="pg-init",
+                    image="alpine/psql:18.4",
+                    replicas=1,
+                    mode="completed",
+                ),
+            ],
+        )
+
+        assert ready is False
+        assert "pg-init 0/1" in report
+        assert "exit=1" in report
+        assert "exit code: 1" in summary
+
     def test_container_summary_sorts_recent_containers_at_bottom(self) -> None:
         client = MagicMock()
         template = ComposeTemplate()
@@ -1287,6 +1403,38 @@ services:
             with pytest.raises(ConfigurationError):
                 deployer._parse_expected_services(stack)
 
+    def test_parse_expected_services_marks_restart_policy_none_as_completed(self) -> None:
+        client = MagicMock()
+        template = ComposeTemplate()
+        deployer = StackDeployer(
+            client,
+            template,
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
+
+        expected = deployer._parse_expected_services(
+            """version: '3'
+services:
+  pg-init:
+    image: alpine/psql:18.4
+    deploy:
+      restart_policy:
+        condition: none
+  app:
+    image: app:latest
+""",
+        )
+
+        assert expected == [
+            ExpectedService(
+                name="pg-init",
+                image="alpine/psql:18.4",
+                replicas=1,
+                mode="completed",
+            ),
+            ExpectedService(name="app", image="app:latest", replicas=1),
+        ]
+
     def test_containers_ready_reports_uninspectable_containers(self) -> None:
         client = MagicMock()
         client.get_container_config.side_effect = DeployFailedError("inspect failed")
@@ -1334,6 +1482,8 @@ services:
         )
         assert deployer._container_healthcheck({}) is None
         assert deployer._container_health_logs({}) == []
+        assert deployer._container_exit_code({"State": {"ExitCode": 0}}) == 0
+        assert deployer._container_exit_code({"Status": {"ContainerStatus": {"ExitCode": 1}}}) == 1
         assert (
             deployer._container_started_at({"State": {"StartedAt": "0001-01-01T00:00:00Z"}}) is None
         )
