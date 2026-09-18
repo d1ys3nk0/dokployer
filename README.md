@@ -35,6 +35,8 @@ App targeting:
 - `DOKPLOY_ENV_ID` + `DOKPLOY_APP_NAME`
   - Used to resolve the app by name when `DOKPLOY_APP_ID` is not set.
 
+When `dokployer` creates a compose stack, the deploy CLI argument or `DOKPLOY_APP_NAME` also becomes Dokploy's `appName` base. Dokploy adds its unique suffix, producing a stable runtime and service-name prefix across redeployments. Existing compose stacks keep their current names.
+
 Optional runtime variables:
 
 - `DOKPLOYER_INTERPOLATION_PREFIX`

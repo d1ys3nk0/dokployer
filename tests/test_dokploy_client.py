@@ -212,14 +212,23 @@ class TestDokployClientTransport:
         client = _client()
 
         mock_response = MockResponse(b'{"composeId": "cmp-123"}')
+        captured_data: dict[object, object] = {}
 
-        def capture_urlopen(_req: object, **_kwargs: object) -> MockResponse:
+        def capture_urlopen(req: object, **_kwargs: object) -> MockResponse:
+            if hasattr(req, "data") and req.data:
+                captured_data["body"] = json.loads(req.data.decode("utf-8"))
             return mock_response
 
         monkeypatch.setattr("urllib.request.urlopen", capture_urlopen)
 
         result = client.create_compose(name="my-stack", environment_id="env-001")
 
+        assert captured_data["body"] == {
+            "name": "my-stack",
+            "appName": "my-stack",
+            "environmentId": "env-001",
+            "composeType": "stack",
+        }
         assert result == {"composeId": "cmp-123"}
 
     def test_update_compose_sends_correct_body(self, monkeypatch: pytest.MonkeyPatch) -> None:

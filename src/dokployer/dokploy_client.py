@@ -177,6 +177,7 @@ class DokployClient:
             "/api/compose.create",
             {
                 "name": name,
+                "appName": name,
                 "environmentId": environment_id,
                 "composeType": compose_type,
             },
