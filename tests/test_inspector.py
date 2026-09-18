@@ -236,3 +236,34 @@ def test_inspector_raises_when_app_not_found(monkeypatch: pytest.MonkeyPatch) ->
         inspector.containers()
 
     assert "missing-app" in str(exc_info.value)
+
+
+def test_inspector_reads_deployment_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+    client = MagicMock()
+    client.read_deployment_logs.return_value = "deploy output"
+
+    assert _inspector(client).deployment_logs("dep-1", 25) == "deploy output"
+    client.read_deployment_logs.assert_called_once_with("dep-1", 25)
+
+
+def test_inspector_resolves_compose_for_container_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+    monkeypatch.setenv("DOKPLOY_APP_ID", "cmp-direct")
+    client = MagicMock()
+    client.get_compose.return_value = {"composeId": "cmp-direct", "name": "my-app"}
+    client.read_compose_logs.return_value = "container output"
+
+    result = _inspector(client).container_logs(
+        "ctr-1",
+        tail=50,
+        since="5m",
+        search="error",
+    )
+
+    assert result == "container output"
+    client.read_compose_logs.assert_called_once_with("cmp-direct", "ctr-1", 50, "5m", "error")

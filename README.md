@@ -1,8 +1,6 @@
 # Dokployer
 
-Dokployer is CLI tool that uploads interpolated Docker Swarm stack files to
-Dokploy, updates or creates the target compose stack, waits until deployment
-finishes, and can optionally verify container readiness.
+Dokployer is CLI tool that uploads interpolated Docker Swarm stack files to Dokploy, updates or creates the target compose stack, waits until deployment finishes, and can optionally verify container readiness.
 
 It is designed for CI/CD usage where the stack YAML and Dokploy env file need
 light templating from the current process environment before they are sent to
@@ -17,10 +15,9 @@ Dokploy.
 - Optionally upload a Dokploy env file together with the stack.
 - Always poll Dokploy until deploy status becomes `done`.
 - Optionally wait until expected stack containers run the image specified in the stack file, or one-shot services complete successfully.
-- Inspect Dokploy app, services, containers, and deployments through API-only
-  read-only commands.
-- Uses only the Dokploy HTTP API with `DOKPLOY_API_KEY`; it does not use SSH,
-  Docker CLI, or host-level access.
+- Automatically include the target deployment log, a structured container summary, and relevant container logs when a failure occurs after Dokploy accepts the deploy.
+- Inspect Dokploy app, services, containers, deployments, and raw logs through API-only read-only commands.
+- Uses only the Dokploy HTTP API with `DOKPLOY_API_KEY`; it does not use SSH, Docker CLI, or host-level access.
 
 ## Requirements
 
@@ -45,20 +42,22 @@ Optional runtime variables:
 - `DEPLOY_POLL_TIMEOUT`
   - Max seconds to wait for Dokploy deploy status. Default: `60`.
 - `STACK_POLL_INTERVAL`
-  - Polling interval in seconds for stack container readiness checks. Default:
-    `5`.
+  - Polling interval in seconds for stack container readiness checks. Default: `5`.
 - `STACK_POLL_TIMEOUT`
   - Max seconds to wait for stack container readiness checks. Default: `300`.
+- `FAILURE_LOG_TAIL`
+  - Number of deployment and container log lines to include in automatic failure diagnostics. Default: `100`; accepted range: `1` to `10000`.
 
-`--wait` optionally enables container readiness checks after Dokploy reports the
-deploy as `done`:
+`--wait` optionally enables container readiness checks after Dokploy reports the deploy as `done`:
 
 - `--wait`
   - Waits up to `STACK_POLL_TIMEOUT` seconds.
 - `--wait 300`
   - Waits up to `300` seconds.
 
-Container readiness is API-only. `dokployer` verifies that expected normal service replicas are running with the interpolated `services.<name>.image` value. Services with `deploy.restart_policy.condition: none` are treated as one-shot jobs and are ready after a successful terminal state: Docker Swarm `complete`, or Docker `exited` with exit code `0` when inspect exposes the exit code.
+Container readiness is API-only and tracks the new deployment rather than accepting a previous deployment's terminal status. `dokployer` verifies the expected replica count and interpolated `services.<name>.image` value. Normal services must be `running`; when either the stack service or inspected container image defines a healthcheck, health must be exactly `healthy`, so missing, `starting`, and `unhealthy` health states are not ready. Services with `deploy.restart_policy.condition: none` are treated as one-shot jobs and remain ready after a successful terminal state: Docker Swarm `complete`, or Docker `exited` with exit code `0` when inspect exposes the exit code.
+
+After any failure that occurs after `compose.deploy` is accepted, `dokployer` preserves the original error and appends best-effort diagnostics. Diagnostic collection never replaces the original failure, and successful deployments do not request or print logs.
 
 Services used with `--wait` must define `image`; `deploy.mode: global` is not supported because the expected replica count cannot be derived without Docker node access.
 
@@ -113,13 +112,14 @@ uv run dokployer inspect app
 uv run dokployer inspect services
 uv run dokployer inspect containers --running
 uv run dokployer inspect deployments --limit 10
+uv run dokployer inspect deployment-logs dep-123 --tail 200
+uv run dokployer inspect container-logs ctr-123 --tail 200 --since 30m --search error
+uv run dokployer inspect container-logs ctr-123 --app-name app-name --since all
 ```
 
-Inspection commands print tab-separated text by default. Add `--json` to print
-JSON.
+App, service, container, and deployment inspection commands print tab-separated text by default; add `--json` to print JSON. Log inspection commands write the API log string unchanged.
 
-Inspection commands only use the Dokploy API. They do not use SSH, Docker CLI,
-or host log streaming.
+Inspection commands only use the Dokploy API. They do not use SSH, Docker CLI, or host log streaming.
 
 ## Docker Usage
 

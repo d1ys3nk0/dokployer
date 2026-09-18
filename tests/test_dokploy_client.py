@@ -323,3 +323,88 @@ class TestDokployClientTransport:
         req = call_args[0][0]
         assert req.full_url.startswith("http://test.local/api/trpc/docker.getConfig?input=")
         assert result == {"Config": {"Image": "app:latest"}}
+
+    def test_read_deployment_logs_returns_string_and_encodes_query(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            MagicMock(return_value=MockResponse(b'"line one\\nline two"')),
+        )
+
+        assert client.read_deployment_logs("dep/id", tail=25) == "line one\nline two"
+
+        request = urllib.request.urlopen.call_args.args[0]
+        assert request.full_url == (
+            "http://test.local/api/deployment.readLogs?deploymentId=dep%2Fid&tail=25"
+        )
+
+    def test_read_compose_logs_encodes_all_query_values(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            MagicMock(return_value=MockResponse(b'"matched"')),
+        )
+
+        result = client.read_compose_logs(
+            "cmp/id",
+            "ctr id",
+            tail=50,
+            since="10m",
+            search="error retry",
+        )
+
+        assert result == "matched"
+        request = urllib.request.urlopen.call_args.args[0]
+        assert request.full_url == (
+            "http://test.local/api/compose.readLogs?composeId=cmp%2Fid&containerId=ctr+id"
+            "&tail=50&since=10m&search=error+retry"
+        )
+
+    @pytest.mark.parametrize("tail", [0, 10_001])
+    def test_read_logs_rejects_invalid_tail(self, tail: int) -> None:
+        with pytest.raises(ValueError, match="tail must be between"):
+            _client().read_deployment_logs("dep-1", tail)
+
+    def test_read_compose_logs_rejects_invalid_since(self) -> None:
+        with pytest.raises(ValueError, match="since must be"):
+            _client().read_compose_logs("cmp-1", "ctr-1", since="yesterday")
+
+    @pytest.mark.parametrize("search", ["invalid/search", "x" * 501])
+    def test_read_compose_logs_rejects_invalid_search(self, search: str) -> None:
+        with pytest.raises(ValueError, match="search must contain at most 500"):
+            _client().read_compose_logs("cmp-1", "ctr-1", search=search)
+
+    def test_read_compose_logs_accepts_and_transmits_empty_search(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            MagicMock(return_value=MockResponse(b'"output"')),
+        )
+
+        assert client.read_compose_logs("cmp-1", "ctr-1", search="") == "output"
+
+        request = urllib.request.urlopen.call_args.args[0]
+        assert request.full_url.endswith("tail=100&since=all&search=")
+
+    def test_read_logs_rejects_non_string_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            MagicMock(return_value=MockResponse(b'{"logs": "wrong shape"}')),
+        )
+
+        with pytest.raises(DokployAPIError) as exc_info:
+            _client().read_deployment_logs("dep-1")
+
+        assert "expected a string" in str(exc_info.value)

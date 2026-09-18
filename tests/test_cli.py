@@ -187,6 +187,73 @@ def test_main_parses_inspect_deployments_command(capsys: pytest.CaptureFixture[s
     assert "status\tdeploymentId" in capsys.readouterr().out
 
 
+def test_main_prints_deployment_logs_without_formatting(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    inspector = MagicMock(spec=DokployInspector)
+    inspector.deployment_logs.return_value = "first\nsecond"
+
+    with patch.object(cli_mod, "DokployInspector", return_value=inspector):
+        exit_code = cli_mod.main(["inspect", "deployment-logs", "dep-1", "--tail", "25"])
+
+    assert exit_code == 0
+    inspector.deployment_logs.assert_called_once_with("dep-1", 25)
+    assert capsys.readouterr().out == "first\nsecond"
+
+
+def test_main_resolves_and_prints_container_logs_raw(capsys: pytest.CaptureFixture[str]) -> None:
+    inspector = MagicMock(spec=DokployInspector)
+    inspector.container_logs.return_value = "raw output\n"
+
+    with patch.object(cli_mod, "DokployInspector", return_value=inspector):
+        exit_code = cli_mod.main(
+            [
+                "inspect",
+                "container-logs",
+                "ctr-1",
+                "--app-name",
+                "my-app",
+                "--tail",
+                "50",
+                "--since",
+                "2h",
+                "--search",
+                "failure text",
+            ],
+        )
+
+    assert exit_code == 0
+    inspector.container_logs.assert_called_once_with(
+        "ctr-1",
+        "my-app",
+        tail=50,
+        since="2h",
+        search="failure text",
+    )
+    assert capsys.readouterr().out == "raw output\n"
+
+
+@pytest.mark.parametrize(
+    ("args", "fragment"),
+    [
+        (["inspect", "deployment-logs", "dep-1", "--tail", "10001"], "between 1 and 10000"),
+        (["inspect", "container-logs", "ctr-1", "--since", "1w"], "positive duration"),
+        (["inspect", "container-logs", "ctr-1", "--search", "invalid/search"], "at most 500"),
+        (["inspect", "container-logs", "ctr-1", "--search", "x" * 501], "at most 500"),
+    ],
+)
+def test_main_rejects_invalid_log_options(
+    args: list[str],
+    fragment: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli_mod.main(args)
+
+    assert exc_info.value.code == 2
+    assert fragment in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("command", ["logs", "stack-name"])
 def test_main_rejects_unknown_top_level_commands(
     capsys: pytest.CaptureFixture[str],

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -13,7 +14,7 @@ from http.client import HTTPException
 from importlib.metadata import PackageNotFoundError, version
 
 from dokployer.config import DokployConfig
-from dokployer.constants import DEFAULT_HTTP_TIMEOUT_SECONDS
+from dokployer.constants import DEFAULT_HTTP_TIMEOUT_SECONDS, LOG_SEARCH_PATTERN, MAX_LOG_TAIL
 from dokployer.errors import DokployAPIError
 from dokployer.models import (
     parse_compose_status,
@@ -150,6 +151,13 @@ class DokployClient:
         obj = self._request_json(method, path, body, retry_get=retry_get)
         return obj if isinstance(obj, dict) else {}
 
+    def _request_string(self, path: str) -> str:
+        obj = self._request_json("GET", path, retry_get=True)
+        if not isinstance(obj, str):
+            msg = f"{path}: malformed response: expected a string"
+            raise DokployAPIError(msg, path=path)
+        return obj
+
     def get_environment(self, environment_id: str) -> dict[str, object]:
         """Fetch environment data from Dokploy."""
         return self._request(
@@ -250,3 +258,47 @@ class DokployClient:
             return {}
         json_data = result_data.get("json")
         return json_data if isinstance(json_data, dict) else {}
+
+    def read_deployment_logs(self, deployment_id: str, tail: int = 100) -> str:
+        """Read the raw log output for one deployment."""
+        _validate_log_tail(tail)
+        query = urllib.parse.urlencode({"deploymentId": deployment_id, "tail": tail})
+        return self._request_string(f"/api/deployment.readLogs?{query}")
+
+    def read_compose_logs(
+        self,
+        compose_id: str,
+        container_id: str,
+        tail: int = 100,
+        since: str = "all",
+        search: str | None = None,
+    ) -> str:
+        """Read raw logs for one container in a compose app."""
+        _validate_log_tail(tail)
+        if since != "all" and re.fullmatch(r"[1-9][0-9]*[smhd]", since) is None:
+            msg = (
+                f"since must be 'all' or a positive duration ending in s, m, h, or d, got {since!r}"
+            )
+            raise ValueError(msg)
+        if search is not None and re.fullmatch(LOG_SEARCH_PATTERN, search) is None:
+            msg = (
+                "search must contain at most 500 letters, numbers, spaces, dots, "
+                "underscores, or hyphens"
+            )
+            raise ValueError(msg)
+        query_params: dict[str, str | int] = {
+            "composeId": compose_id,
+            "containerId": container_id,
+            "tail": tail,
+            "since": since,
+        }
+        if search is not None:
+            query_params["search"] = search
+        query = urllib.parse.urlencode(query_params)
+        return self._request_string(f"/api/compose.readLogs?{query}")
+
+
+def _validate_log_tail(tail: int) -> None:
+    if isinstance(tail, bool) or not 1 <= tail <= MAX_LOG_TAIL:
+        msg = f"tail must be between 1 and 10000, got {tail!r}"
+        raise ValueError(msg)

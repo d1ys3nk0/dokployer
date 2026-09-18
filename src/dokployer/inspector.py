@@ -39,6 +39,21 @@ class DokployInspectClient(Protocol):
         """Fetch compose deployments."""
         ...
 
+    def read_deployment_logs(self, deployment_id: str, tail: int = 100) -> str:
+        """Read deployment logs."""
+        ...
+
+    def read_compose_logs(
+        self,
+        compose_id: str,
+        container_id: str,
+        tail: int = 100,
+        since: str = "all",
+        search: str | None = None,
+    ) -> str:
+        """Read container logs for a compose app."""
+        ...
+
 
 class DokployInspector:
     """API-only Dokploy app inspection helper."""
@@ -138,6 +153,29 @@ class DokployInspector:
         """Return recent deployments for the resolved app."""
         app = self._resolve_app(app_name)
         return self._client.get_deployments_by_compose(app.compose_id)[:limit]
+
+    def deployment_logs(self, deployment_id: str, tail: int = 100) -> str:
+        """Return raw logs for one deployment."""
+        return self._client.read_deployment_logs(deployment_id, tail)
+
+    def container_logs(
+        self,
+        container_id: str,
+        app_name: str | None = None,
+        *,
+        tail: int = 100,
+        since: str = "all",
+        search: str | None = None,
+    ) -> str:
+        """Return raw logs for one container in the resolved app."""
+        app = self._resolve_app(app_name)
+        return self._client.read_compose_logs(
+            app.compose_id,
+            container_id,
+            tail,
+            since,
+            search,
+        )
 
 
 def _service_name_from_container(container_name: str) -> str:

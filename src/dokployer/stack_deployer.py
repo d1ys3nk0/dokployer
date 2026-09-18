@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, cast
 
 import yaml
@@ -13,10 +14,13 @@ import yaml
 from dokployer.constants import (
     DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS,
     DEFAULT_DEPLOY_POLL_TIMEOUT_SECONDS,
+    DEFAULT_FAILURE_LOG_TAIL,
     DEFAULT_STACK_POLL_INTERVAL_SECONDS,
     DEFAULT_STACK_POLL_TIMEOUT_SECONDS,
     DEPLOY_POLL_INTERVAL,
     DEPLOY_POLL_TIMEOUT,
+    FAILURE_LOG_TAIL,
+    MAX_LOG_TAIL,
     STACK_POLL_INTERVAL,
     STACK_POLL_TIMEOUT,
     ComposeStatus,
@@ -26,6 +30,7 @@ from dokployer.errors import (
     DeployFailedError,
     DeployTimeoutError,
     DokployAPIError,
+    DokployerError,
 )
 from dokployer.models import parse_compose_created, parse_environment_response
 
@@ -51,6 +56,16 @@ class ExpectedService:
     image: str
     replicas: int
     mode: ServiceReadinessMode = "running"
+    healthcheck: bool = False
+
+
+@dataclass(slots=True)
+class DeploymentAttempt:
+    """State associated with the deployment accepted by Dokploy."""
+
+    started_at: datetime
+    previous_deployment_id: str | None
+    target_deployment_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,27 +113,24 @@ class StackDeployer:
                 return compose.compose_id
         return None
 
-    def _deploy_failure_message(self, compose_id: str, stack_name: str) -> str:
+    def _deploy_failure_message(
+        self,
+        stack_name: str,
+        deployment: dict[str, object] | None,
+    ) -> str:
         lines = [f"deploy failed: {stack_name}"]
-        try:
-            deployments = self._client.get_deployments_by_compose(compose_id)
-        except DokployAPIError as exc:
-            lines.append(f"unable to fetch deployment metadata: {exc}")
-            return "\n".join(lines)
-
-        latest = deployments[0] if deployments and isinstance(deployments[0], dict) else None
-        if latest is None:
+        if deployment is None:
             lines.append("latest deployment metadata: not found")
             return "\n".join(lines)
 
-        deployment_id = latest.get("deploymentId")
+        deployment_id = deployment.get("deploymentId")
         if isinstance(deployment_id, str) and deployment_id:
             lines.append(f"latest deployment: {deployment_id}")
-        log_path = latest.get("logPath")
+        log_path = deployment.get("logPath")
         if isinstance(log_path, str) and log_path:
             lines.append(f"deployment log path: {log_path}")
 
-        error_message = latest.get("errorMessage")
+        error_message = deployment.get("errorMessage")
         if isinstance(error_message, str) and error_message:
             lines.append(error_message)
 
@@ -155,6 +167,16 @@ class StackDeployer:
             raise ConfigurationError(msg) from exc
         if value <= 0:
             msg = f"invalid {name}: expected a positive integer, got {raw!r}"
+            raise ConfigurationError(msg)
+        return value
+
+    def _failure_log_tail(self) -> int:
+        value = self._wait_value(FAILURE_LOG_TAIL, DEFAULT_FAILURE_LOG_TAIL)
+        if value > MAX_LOG_TAIL:
+            msg = (
+                f"invalid {FAILURE_LOG_TAIL}: expected an integer from 1 to "
+                f"{MAX_LOG_TAIL}, got {value!r}"
+            )
             raise ConfigurationError(msg)
         return value
 
@@ -207,10 +229,15 @@ class StackDeployer:
                         image=image,
                         replicas=replicas,
                         mode=self._service_readiness_mode(deploy),
+                        healthcheck=self._stack_healthcheck_enabled(raw_service),
                     ),
                 )
 
         return expected
+
+    def _stack_healthcheck_enabled(self, service: dict[object, object]) -> bool:
+        healthcheck = service.get("healthcheck")
+        return isinstance(healthcheck, dict) and healthcheck.get("disable") is not True
 
     def _service_readiness_mode(self, deploy: dict[object, object]) -> ServiceReadinessMode:
         restart_policy = deploy.get("restart_policy")
@@ -234,14 +261,13 @@ class StackDeployer:
         self,
         compose_id: str,
         stack_name: str,
-        previous_deployment_id: str | None,
-    ) -> None:
+        attempt: DeploymentAttempt,
+    ) -> str:
         """Poll until deploy completes or times out."""
         timeout = self._wait_value(DEPLOY_POLL_TIMEOUT, DEFAULT_DEPLOY_POLL_TIMEOUT_SECONDS)
         interval = self._wait_value(DEPLOY_POLL_INTERVAL, DEFAULT_DEPLOY_POLL_INTERVAL_SECONDS)
         deadline = time.monotonic() + timeout
         unknown_polls = 0
-        target_deployment_id: str | None = None
 
         while time.monotonic() < deadline:
             time.sleep(interval)
@@ -257,25 +283,35 @@ class StackDeployer:
             else:
                 unknown_polls = 0
 
-            latest = self._latest_deployment(compose_id)
+            deployments = self._client.get_deployments_by_compose(compose_id)
+            latest = deployments[0] if deployments and isinstance(deployments[0], dict) else None
             latest_deployment_id = self._deployment_id(latest)
             if (
-                target_deployment_id is None
+                attempt.target_deployment_id is None
                 and latest_deployment_id is not None
-                and latest_deployment_id != previous_deployment_id
+                and latest_deployment_id != attempt.previous_deployment_id
             ):
-                target_deployment_id = latest_deployment_id
+                attempt.target_deployment_id = latest_deployment_id
 
-            if target_deployment_id is None:
+            if attempt.target_deployment_id is None:
                 continue
 
-            deployment_status = self._deployment_status(latest)
+            target = next(
+                (
+                    item
+                    for item in deployments
+                    if self._deployment_id(item) == attempt.target_deployment_id
+                ),
+                None,
+            )
+            deployment_status = self._deployment_status(target)
             effective_status = deployment_status or status_str
             if effective_status == ComposeStatus.DONE:
                 logger.info("Deploy OK: %s", stack_name)
-                return
+                return attempt.target_deployment_id
             if effective_status == ComposeStatus.ERROR:
-                raise DeployFailedError(self._deploy_failure_message(compose_id, stack_name))
+                target_data = target if isinstance(target, dict) else None
+                raise DeployFailedError(self._deploy_failure_message(stack_name, target_data))
 
         msg = f"deploy timed out after {timeout}s: {stack_name}"
         raise DeployTimeoutError(msg)
@@ -301,6 +337,7 @@ class StackDeployer:
         app_name: str,
         expected_services: list[ExpectedService],
         timeout: int,
+        deployment_started_at: datetime,
     ) -> None:
         deadline = time.monotonic() + timeout
         interval = self._wait_value(STACK_POLL_INTERVAL, DEFAULT_STACK_POLL_INTERVAL_SECONDS)
@@ -309,7 +346,11 @@ class StackDeployer:
 
         while time.monotonic() < deadline:
             containers = self._client.get_stack_containers_by_app_name(app_name)
-            ready, report, summary = self._containers_ready(containers, expected_services)
+            ready, report, summary = self._containers_ready(
+                containers,
+                expected_services,
+                deployment_started_at=deployment_started_at,
+            )
             last_report = report
             last_summary = summary
             if ready:
@@ -329,11 +370,15 @@ class StackDeployer:
         self,
         containers: list[object],
         expected_services: list[ExpectedService],
+        *,
+        deployment_started_at: datetime | None = None,
     ) -> tuple[bool, str, str]:
         observed: dict[str, list[str]] = {service.name: [] for service in expected_services}
         ready_counts = {service.name: 0 for service in expected_services}
         expected_by_name = {service.name: service for service in expected_services}
         diagnostics = self._container_diagnostics(containers, expected_by_name)
+        if deployment_started_at is not None:
+            diagnostics = self._prefer_current_attempt(diagnostics, deployment_started_at)
 
         for diagnostic in diagnostics:
             observed[diagnostic.service_name].append(self._container_readiness_report(diagnostic))
@@ -359,14 +404,41 @@ class StackDeployer:
         report = f"missing ready replicas: {', '.join(missing)}; {' | '.join(details)}"
         return False, report, summary
 
+    def _prefer_current_attempt(
+        self,
+        diagnostics: list[ContainerDiagnostic],
+        deployment_started_at: datetime,
+    ) -> list[ContainerDiagnostic]:
+        preferred: list[ContainerDiagnostic] = []
+        for service_name in {diagnostic.service_name for diagnostic in diagnostics}:
+            service_diagnostics = [
+                diagnostic for diagnostic in diagnostics if diagnostic.service_name == service_name
+            ]
+            current = [
+                diagnostic
+                for diagnostic in service_diagnostics
+                if _timestamp_at_or_after(diagnostic.started_at, deployment_started_at)
+            ]
+            without_timestamp = [
+                diagnostic for diagnostic in service_diagnostics if diagnostic.started_at is None
+            ]
+            preferred.extend(current + without_timestamp)
+        return preferred
+
     def _container_diagnostics(
         self,
         containers: list[object],
         expected_by_name: dict[str, ExpectedService],
+        *,
+        suppress_inspect_errors: bool = False,
     ) -> list[ContainerDiagnostic]:
         diagnostics = []
         for container in containers:
-            diagnostic = self._container_diagnostic(container, expected_by_name)
+            diagnostic = self._container_diagnostic(
+                container,
+                expected_by_name,
+                suppress_inspect_errors=suppress_inspect_errors,
+            )
             if diagnostic is not None:
                 diagnostics.append(diagnostic)
         return diagnostics
@@ -375,6 +447,8 @@ class StackDeployer:
         self,
         container: object,
         expected_by_name: dict[str, ExpectedService],
+        *,
+        suppress_inspect_errors: bool = False,
     ) -> ContainerDiagnostic | None:
         if not isinstance(container, dict):
             return None
@@ -412,6 +486,8 @@ class StackDeployer:
         try:
             config = self._client.get_container_config(container_id)
         except DokployAPIError as exc:
+            if not suppress_inspect_errors:
+                raise
             return ContainerDiagnostic(
                 service_name=service_name,
                 name=name,
@@ -437,6 +513,7 @@ class StackDeployer:
             expected,
             state=state,
             health=health,
+            has_healthcheck=expected.healthcheck or self._container_has_healthcheck(config),
             image=image,
             exit_code=exit_code,
         )
@@ -500,12 +577,13 @@ class StackDeployer:
                 lines.append(f"    inspect: {diagnostic.inspect_error}")
         return "\n".join(lines)
 
-    def _container_matches(
+    def _container_matches(  # noqa: PLR0913
         self,
         expected: ExpectedService,
         *,
         state: str | None,
         health: str | None,
+        has_healthcheck: bool = False,
         image: str | None,
         exit_code: int | None,
     ) -> bool:
@@ -513,7 +591,19 @@ class StackDeployer:
             return False
         if expected.mode == "completed":
             return state == "complete" or (state == "exited" and exit_code == 0)
-        return state == "running" and (health is None or health == "healthy")
+        if state != "running":
+            return False
+        return health == "healthy" if has_healthcheck else health in {None, "healthy"}
+
+    def _container_has_healthcheck(self, config: dict[str, object]) -> bool:
+        raw_config = config.get("Config")
+        if not isinstance(raw_config, dict):
+            return False
+        healthcheck = raw_config.get("Healthcheck")
+        if not isinstance(healthcheck, dict):
+            return False
+        test = healthcheck.get("Test")
+        return test not in ("NONE", ["NONE"])
 
     def _container_state(
         self,
@@ -761,6 +851,7 @@ class StackDeployer:
         raw_template = self._templates.load(template_path)
         compose_file_content = self._templates.interpolate(raw_template)
         wait_timeout = self._stack_wait_timeout(wait)
+        failure_log_tail = self._failure_log_tail()
         expected_services = (
             self._parse_expected_services(compose_file_content)
             if wait_timeout is not None
@@ -810,57 +901,167 @@ class StackDeployer:
             env_content=env_content,
         )
         previous_deployment_id = self._latest_deployment_id(compose_id)
+        attempt = DeploymentAttempt(
+            started_at=datetime.now(UTC),
+            previous_deployment_id=previous_deployment_id,
+        )
         self._client.deploy_compose(compose_id)
 
         logger.info("compose.deploy accepted for %s (%s)", compose_id, app_name)
-        self._wait_for_deploy_with_container_summary(
+        self._monitor_deployment(
             compose_id=compose_id,
             app_name=app_name,
             stack_name=stack_name,
-            previous_deployment_id=previous_deployment_id,
+            attempt=attempt,
             expected_services=expected_services,
+            wait_timeout=wait_timeout,
+            failure_log_tail=failure_log_tail,
         )
-        if wait_timeout is not None and expected_services is not None:
-            container_app_name = self._compose_app_name(stack_name, compose_id)
-            self._wait_for_containers(container_app_name, expected_services, wait_timeout)
 
-    def _wait_for_deploy_with_container_summary(
+    def _monitor_deployment(  # noqa: PLR0913
         self,
         *,
         compose_id: str,
         app_name: str,
         stack_name: str | None,
-        previous_deployment_id: str | None,
+        attempt: DeploymentAttempt,
         expected_services: list[ExpectedService] | None,
+        wait_timeout: int | None,
+        failure_log_tail: int,
     ) -> None:
         try:
-            self._wait_for_deploy(compose_id, app_name, previous_deployment_id)
-        except DeployFailedError as exc:
-            if expected_services is None:
-                raise
-            raise DeployFailedError(
-                self._message_with_best_effort_container_summary(
-                    str(exc),
-                    stack_name,
-                    compose_id,
+            self._wait_for_deploy(compose_id, app_name, attempt)
+            if wait_timeout is not None and expected_services is not None:
+                container_app_name = self._compose_app_name(stack_name, compose_id)
+                self._wait_for_containers(
+                    container_app_name,
                     expected_services,
-                ),
-            ) from exc
+                    wait_timeout,
+                    attempt.started_at,
+                )
+        except DokployerError as exc:
+            try:
+                diagnostics = self._failure_diagnostics(
+                    compose_id=compose_id,
+                    stack_name=stack_name,
+                    attempt=attempt,
+                    expected_services=expected_services or [],
+                    tail=failure_log_tail,
+                )
+            except Exception as diagnostic_error:  # noqa: BLE001
+                diagnostics = f"Failure diagnostics:\n  unavailable: {diagnostic_error}"
+            raise _exception_with_diagnostics(exc, diagnostics) from exc
 
-    def _message_with_best_effort_container_summary(
+    def _failure_diagnostics(
         self,
-        message: str,
-        stack_name: str | None,
+        *,
         compose_id: str,
+        stack_name: str | None,
+        attempt: DeploymentAttempt,
         expected_services: list[ExpectedService],
+        tail: int,
     ) -> str:
+        sections = [self._deployment_log_diagnostic(compose_id, attempt, tail)]
+
         try:
             app_name = self._compose_app_name(stack_name, compose_id)
             containers = self._client.get_stack_containers_by_app_name(app_name)
-            _, _, summary = self._containers_ready(containers, expected_services)
+            expected_by_name = {service.name: service for service in expected_services}
+            if expected_by_name:
+                diagnostics = self._container_diagnostics(
+                    containers,
+                    expected_by_name,
+                    suppress_inspect_errors=True,
+                )
+            else:
+                diagnostics = self._diagnostics_for_all_containers(containers)
+            diagnostics = self._prefer_current_attempt(diagnostics, attempt.started_at)
+            summary = self._container_summary(diagnostics)
         except (ConfigurationError, DokployAPIError) as exc:
             summary = f"Container summary:\n  unavailable: {exc}"
-        return f"{message}\n{summary}"
+            diagnostics = []
+        sections.append(summary)
+        sections.append(self._compose_log_diagnostics(compose_id, diagnostics, tail))
+        return "\n".join(sections)
+
+    def _deployment_log_diagnostic(
+        self,
+        compose_id: str,
+        attempt: DeploymentAttempt,
+        tail: int,
+    ) -> str:
+        deployment_id = attempt.target_deployment_id
+        if deployment_id is None:
+            try:
+                deployments = self._client.get_deployments_by_compose(compose_id)
+                for item in deployments:
+                    candidate = self._deployment_id(item)
+                    if candidate is not None and candidate != attempt.previous_deployment_id:
+                        deployment_id = candidate
+                        break
+                attempt.target_deployment_id = deployment_id
+            except DokployAPIError as exc:
+                return f"Target deployment log:\n  unavailable: {exc}"
+        if deployment_id is None:
+            return "Target deployment log:\n  unavailable: target deployment was not observed"
+        try:
+            logs = self._client.read_deployment_logs(deployment_id, tail)
+        except (DokployAPIError, ValueError) as exc:
+            return f"Target deployment log ({deployment_id}):\n  unavailable: {exc}"
+        if not isinstance(logs, str):
+            return (
+                f"Target deployment log ({deployment_id}):\n  unavailable: malformed log response"
+            )
+        if not logs:
+            return f"Target deployment log ({deployment_id}):\n  no log output"
+        return f"Target deployment log ({deployment_id}):\n{logs}"
+
+    def _diagnostics_for_all_containers(
+        self,
+        containers: list[object],
+    ) -> list[ContainerDiagnostic]:
+        expected: dict[str, ExpectedService] = {}
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            name = container.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            service_name = _service_name_from_container(name)
+            image = self._container_image({}, container) or "<unknown>"
+            expected.setdefault(service_name, ExpectedService(service_name, image, 1))
+        return self._container_diagnostics(
+            containers,
+            expected,
+            suppress_inspect_errors=True,
+        )
+
+    def _compose_log_diagnostics(
+        self,
+        compose_id: str,
+        diagnostics: list[ContainerDiagnostic],
+        tail: int,
+    ) -> str:
+        lines = ["Container logs:"]
+        with_ids = [diagnostic for diagnostic in diagnostics if diagnostic.container_id is not None]
+        if not with_ids:
+            lines.append("  no relevant containers with IDs observed")
+            return "\n".join(lines)
+        for diagnostic in sorted(with_ids, key=_container_sort_key):
+            container_id = cast("str", diagnostic.container_id)
+            lines.append(f"  {diagnostic.service_name} ({container_id}):")
+            try:
+                logs = self._client.read_compose_logs(compose_id, container_id, tail)
+            except (DokployAPIError, ValueError) as exc:
+                lines.append(f"    unavailable: {exc}")
+                continue
+            if not isinstance(logs, str):
+                lines.append("    unavailable: malformed log response")
+            elif not logs:
+                lines.append("    no log output")
+            else:
+                lines.extend(f"    {line}" for line in logs.splitlines())
+        return "\n".join(lines)
 
 
 def _service_name_from_container(container_name: str) -> str:
@@ -896,6 +1097,30 @@ def _exit_code_from(source: object, keys: tuple[str, ...]) -> int | None:
         if isinstance(exit_code, int) and not isinstance(exit_code, bool):
             return exit_code
     return None
+
+
+def _timestamp_at_or_after(value: str | None, minimum: datetime) -> bool:
+    if value is None:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC) >= minimum
+
+
+def _exception_with_diagnostics(exc: DokployerError, diagnostics: str) -> DokployerError:
+    message = f"{exc}\n{diagnostics}"
+    if isinstance(exc, DokployAPIError):
+        return DokployAPIError(
+            f"{exc.message}\n{diagnostics}",
+            status_code=exc.status_code,
+            api_code=exc.api_code,
+            path=exc.path,
+        )
+    return type(exc)(message)
 
 
 def _exit_code_summary_lines(exit_code: int | None) -> list[str]:

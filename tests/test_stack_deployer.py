@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -17,6 +18,7 @@ from dokployer.errors import (
     ConfigurationError,
     DeployFailedError,
     DeployTimeoutError,
+    DokployAPIError,
 )
 from dokployer.stack_deployer import ContainerDiagnostic, ExpectedService, StackDeployer
 from dokployer.template_manager import ComposeTemplate
@@ -667,17 +669,17 @@ services:
         ]
         client.get_container_config.side_effect = [
             {
-                "Created": "2026-05-05T11:59:00Z",
+                "Created": "2099-05-05T11:59:00Z",
                 "State": {
                     "Status": "running",
-                    "StartedAt": "2026-05-05T12:00:00Z",
+                    "StartedAt": "2099-05-05T12:00:00Z",
                     "Health": {"Status": "healthy"},
                 },
                 "Config": {"Image": "myimage:latest"},
             },
             {
-                "Created": "2026-05-05T12:01:00Z",
-                "State": {"Status": "running", "StartedAt": "2026-05-05T12:02:00Z"},
+                "Created": "2099-05-05T12:01:00Z",
+                "State": {"Status": "running", "StartedAt": "2099-05-05T12:02:00Z"},
                 "Config": {"Image": "myimage:latest@sha256:abc"},
             },
         ]
@@ -695,8 +697,8 @@ services:
         assert "state: running" in logs
         assert "health: healthy" in logs
         assert "image: myimage:latest" in logs
-        assert "created: 2026-05-05T11:59:00Z" in logs
-        assert "started: 2026-05-05T12:00:00Z" in logs
+        assert "created: 2099-05-05T11:59:00Z" in logs
+        assert "started: 2099-05-05T12:00:00Z" in logs
         assert "not configured" not in logs
         assert "unavailable" not in logs
 
@@ -1178,6 +1180,8 @@ services:
             "State": {"Status": "running"},
             "Config": {"Image": "old:latest"},
         }
+        client.read_deployment_logs.return_value = "deployment output"
+        client.read_compose_logs.return_value = "container output"
 
         template = ComposeTemplate()
         deployer = _deployer(client, template)
@@ -1217,6 +1221,8 @@ services:
             "State": {"Status": "running"},
             "Config": {"Image": "old:latest"},
         }
+        client.read_deployment_logs.return_value = "deployment output"
+        client.read_compose_logs.return_value = "container output"
 
         template = ComposeTemplate()
         deployer = _deployer(client, template)
@@ -1538,6 +1544,8 @@ services:
             "State": {"Status": "exited", "Health": {"Status": "unhealthy"}},
             "Config": {"Image": "myimage:latest"},
         }
+        client.read_deployment_logs.return_value = "deployment output"
+        client.read_compose_logs.return_value = "container output"
 
         template = ComposeTemplate()
         deployer = _deployer(client, template)
@@ -1554,6 +1562,178 @@ services:
         assert "state: exited" in message
         assert "health: unhealthy" in message
         assert "unavailable" not in message
+
+    def test_healthcheck_requires_explicit_healthy_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        client = MagicMock()
+        client.get_container_config.return_value = {
+            "State": {"Status": "running", "Health": {"Status": "starting"}},
+            "Config": {
+                "Image": "app:latest",
+                "Healthcheck": {"Test": ["CMD", "check"]},
+            },
+        }
+        deployer = _deployer(client, ComposeTemplate())
+
+        ready, report, _ = deployer._containers_ready(
+            [{"name": "stack_app.1.abc", "containerId": "ctr-1"}],
+            [ExpectedService(name="app", image="app:latest", replicas=1)],
+        )
+
+        assert ready is False
+        assert "health=starting" in report
+
+    def test_stack_healthcheck_requires_inspect_health_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        client = MagicMock()
+        client.get_container_config.return_value = {
+            "State": {"Status": "running"},
+            "Config": {"Image": "app:latest"},
+        }
+        deployer = _deployer(client, ComposeTemplate())
+        expected = deployer._parse_expected_services(
+            """services:
+  app:
+    image: app:latest
+    healthcheck:
+      test: [CMD, check]
+""",
+        )
+
+        ready, report, _ = deployer._containers_ready(
+            [{"name": "stack_app.1.abc", "containerId": "ctr-1"}],
+            expected,
+        )
+
+        assert expected[0].healthcheck is True
+        assert ready is False
+        assert "health=n/a" in report
+
+    def test_readiness_excludes_containers_started_before_deployment(self) -> None:
+        client = MagicMock()
+        client.get_container_config.return_value = {
+            "State": {"Status": "running", "StartedAt": "2026-01-01T00:00:00Z"},
+            "Config": {"Image": "app:latest"},
+        }
+        deployer = StackDeployer(
+            client,
+            ComposeTemplate(),
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
+
+        ready, report, summary = deployer._containers_ready(
+            [{"name": "stack_app.1.abc", "containerId": "ctr-old"}],
+            [ExpectedService(name="app", image="app:latest", replicas=1)],
+            deployment_started_at=datetime(2026, 2, 1, tzinfo=UTC),
+        )
+
+        assert ready is False
+        assert "no containers observed" in report
+        assert "no matching containers observed" in summary
+
+    def test_success_does_not_read_failure_logs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        _fast_wait_clock(monkeypatch)
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        _successful_deploy_status(client)
+
+        _deployer(client, ComposeTemplate()).deploy("my-stack", template_path=compose_tmpl)
+
+        client.read_deployment_logs.assert_not_called()
+        client.read_compose_logs.assert_not_called()
+
+    def test_monitoring_api_error_keeps_type_and_appends_empty_log_diagnostics(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        _fast_wait_clock(monkeypatch)
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text("version: '3'\n", encoding="utf-8")
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        client.get_deployments_by_compose.side_effect = [
+            [],
+            DokployAPIError("status unavailable", status_code=503, path="/deployments"),
+            [{"deploymentId": "dep-1"}],
+        ]
+        client.read_deployment_logs.return_value = ""
+        client.get_compose.return_value = {"name": "my-stack"}
+        client.get_stack_containers_by_app_name.return_value = []
+
+        with pytest.raises(DokployAPIError) as exc_info:
+            _deployer(client, ComposeTemplate()).deploy("my-stack", template_path=compose_tmpl)
+
+        assert exc_info.value.status_code == 503
+        assert "status unavailable" in str(exc_info.value)
+        assert "Target deployment log (dep-1):\n  no log output" in str(exc_info.value)
+        assert "no relevant containers with IDs observed" in str(exc_info.value)
+
+    def test_container_inspect_api_error_is_a_monitoring_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        monkeypatch.setenv("DOKPLOY_ENV_ID", "env-001")
+        _fast_wait_clock(monkeypatch)
+        compose_tmpl = tmp_path / "stack.yml"
+        compose_tmpl.write_text(
+            "services:\n  app:\n    image: app:latest\n",
+            encoding="utf-8",
+        )
+        client = MagicMock()
+        client.get_environment.return_value = {
+            "compose": [{"name": "my-stack", "composeId": "cmp-001"}]
+        }
+        _successful_deploy_status(client)
+        client.get_compose.return_value = {"name": "my-stack"}
+        client.get_stack_containers_by_app_name.return_value = [
+            {"name": "my-stack_app.1.abc", "containerId": "ctr-1"}
+        ]
+        client.get_container_config.side_effect = DokployAPIError(
+            "inspect unavailable",
+            status_code=502,
+        )
+        client.read_deployment_logs.return_value = "deployment output"
+        client.read_compose_logs.return_value = "container output"
+
+        with pytest.raises(DokployAPIError) as exc_info:
+            _deployer(client, ComposeTemplate()).deploy(
+                "my-stack",
+                template_path=compose_tmpl,
+                wait=60,
+            )
+
+        assert exc_info.value.status_code == 502
+        assert "inspect unavailable" in str(exc_info.value)
+        assert "inspect failed" in str(exc_info.value)
+        assert "container output" in str(exc_info.value)
 
 
 class CaplogForDeployer:

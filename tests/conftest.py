@@ -18,5 +18,6 @@ def clear_dokploy_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DEPLOY_POLL_TIMEOUT",
         "STACK_POLL_INTERVAL",
         "STACK_POLL_TIMEOUT",
+        "FAILURE_LOG_TAIL",
     ):
         monkeypatch.delenv(name, raising=False)

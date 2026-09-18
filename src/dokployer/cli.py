@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
 from dokployer.config import resolve_config
+from dokployer.constants import LOG_SEARCH_PATTERN, MAX_LOG_TAIL
 from dokployer.dokploy_client import DokployClient
 from dokployer.errors import DokployerError
 from dokployer.inspector import DokployInspector
@@ -26,6 +28,28 @@ def _positive_int(raw: str) -> int:
         msg = f"expected a positive integer, got {raw!r}"
         raise argparse.ArgumentTypeError(msg)
     return value
+
+
+def _log_tail(raw: str) -> int:
+    value = _positive_int(raw)
+    if value > MAX_LOG_TAIL:
+        msg = f"expected an integer between 1 and 10000, got {raw!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
+def _log_since(raw: str) -> str:
+    if raw == "all" or re.fullmatch(r"[1-9][0-9]*[smhd]", raw):
+        return raw
+    msg = f"expected 'all' or a positive duration such as 30s, 10m, 2h, or 1d, got {raw!r}"
+    raise argparse.ArgumentTypeError(msg)
+
+
+def _log_search(raw: str) -> str:
+    if re.fullmatch(LOG_SEARCH_PATTERN, raw) is not None:
+        return raw
+    msg = "expected at most 500 letters, numbers, spaces, dots, underscores, or hyphens"
+    raise argparse.ArgumentTypeError(msg)
 
 
 def _configure_logging(*, verbose: bool, quiet: bool) -> None:
@@ -177,6 +201,21 @@ def _run_inspect(args: argparse.Namespace) -> None:
     elif args.inspect_command == "deployments":
         data = inspector.deployments(args.limit, args.app_name)
 
+    if args.inspect_command == "deployment-logs":
+        sys.stdout.write(inspector.deployment_logs(args.deployment_id, args.tail))
+        return
+    if args.inspect_command == "container-logs":
+        sys.stdout.write(
+            inspector.container_logs(
+                args.container_id,
+                args.app_name,
+                tail=args.tail,
+                since=args.since,
+                search=args.search,
+            ),
+        )
+        return
+
     if args.json_output:
         _print_json(data)
     else:
@@ -223,6 +262,15 @@ def _parse_args(raw_argv: list[str]) -> argparse.Namespace:
     deployments_parser.add_argument("app_name", nargs="?")
     deployments_parser.add_argument("--limit", type=int, default=10)
     _add_json_arg(deployments_parser)
+    deployment_logs_parser = inspect_subparsers.add_parser("deployment-logs")
+    deployment_logs_parser.add_argument("deployment_id")
+    deployment_logs_parser.add_argument("--tail", type=_log_tail, default=100)
+    container_logs_parser = inspect_subparsers.add_parser("container-logs")
+    container_logs_parser.add_argument("container_id")
+    container_logs_parser.add_argument("--app-name")
+    container_logs_parser.add_argument("--tail", type=_log_tail, default=100)
+    container_logs_parser.add_argument("--since", type=_log_since, default="all")
+    container_logs_parser.add_argument("--search", type=_log_search)
     return parser.parse_args(raw_argv)
 
 
