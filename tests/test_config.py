@@ -23,6 +23,32 @@ def test_resolve_config_reads_canonical_values() -> None:
     assert config.environment_id == "env-new"
     assert config.app_name == "app-new"
     assert config.app_id == "cmp-new"
+    assert config.interpolation_prefix == "$$"
+
+
+def test_resolve_config_reads_custom_interpolation_prefix() -> None:
+    config = resolve_config(
+        {
+            "DOKPLOY_URL": "http://dokploy.local",
+            "DOKPLOY_API_KEY": "key",
+            "DOKPLOYER_INTERPOLATION_PREFIX": "%",
+        }
+    )
+
+    assert config.interpolation_prefix == "%"
+
+
+def test_resolve_config_rejects_empty_interpolation_prefix() -> None:
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_config(
+            {
+                "DOKPLOY_URL": "http://dokploy.local",
+                "DOKPLOY_API_KEY": "key",
+                "DOKPLOYER_INTERPOLATION_PREFIX": "",
+            }
+        )
+
+    assert str(exc_info.value) == "DOKPLOYER_INTERPOLATION_PREFIX must not be empty"
 
 
 def test_resolve_config_ignores_removed_aliases() -> None:

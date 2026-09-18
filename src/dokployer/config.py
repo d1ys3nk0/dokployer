@@ -11,11 +11,13 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 from dokployer.constants import (
+    DEFAULT_INTERPOLATION_PREFIX,
     DOKPLOY_API_KEY,
     DOKPLOY_APP_ID,
     DOKPLOY_APP_NAME,
     DOKPLOY_ENV_ID,
     DOKPLOY_URL,
+    DOKPLOYER_INTERPOLATION_PREFIX,
 )
 from dokployer.errors import ConfigurationError
 
@@ -29,6 +31,7 @@ class DokployConfig:
     environment_id: str | None = None
     app_name: str | None = None
     app_id: str | None = None
+    interpolation_prefix: str = DEFAULT_INTERPOLATION_PREFIX
 
 
 def _env_value(env: Mapping[str, str], name: str) -> str | None:
@@ -55,6 +58,14 @@ def _validate_base_url(raw_url: str) -> str:
     return url
 
 
+def _interpolation_prefix(env: Mapping[str, str]) -> str:
+    prefix = env.get(DOKPLOYER_INTERPOLATION_PREFIX, DEFAULT_INTERPOLATION_PREFIX)
+    if prefix == "":
+        msg = f"{DOKPLOYER_INTERPOLATION_PREFIX} must not be empty"
+        raise ConfigurationError(msg)
+    return prefix
+
+
 def resolve_config(env: Mapping[str, str] | None = None) -> DokployConfig:
     """Resolve Dokploy config from canonical environment variables."""
     environ = os.environ if env is None else env
@@ -64,4 +75,5 @@ def resolve_config(env: Mapping[str, str] | None = None) -> DokployConfig:
         environment_id=_env_value(environ, DOKPLOY_ENV_ID),
         app_name=_env_value(environ, DOKPLOY_APP_NAME),
         app_id=_env_value(environ, DOKPLOY_APP_ID),
+        interpolation_prefix=_interpolation_prefix(environ),
     )

@@ -55,8 +55,10 @@ def test_interpolate_no_vars_returns_unchanged() -> None:
 
 def test_interpolate_raises_on_missing_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MISSING_VAR", raising=False)
-    with pytest.raises(TemplateError):
+    with pytest.raises(TemplateError) as exc_info:
         ComposeTemplate().interpolate("$${MISSING_VAR}")
+
+    assert str(exc_info.value) == ("template references $${MISSING_VAR} but MISSING_VAR is not set")
 
 
 def test_interpolate_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,6 +76,53 @@ def test_interpolate_set_var_ignores_default(
 ) -> None:
     monkeypatch.setenv("MY_VAR", "actual")
     assert ComposeTemplate().interpolate("$${MY_VAR:-fallback}") == "actual"
+
+
+@pytest.mark.parametrize(
+    ("placeholder", "expected"),
+    [
+        ("%{MY_VAR}", "actual"),
+        ("%{MISSING_VAR:-}", ""),
+        ("%{MISSING_VAR:-fallback}", "fallback"),
+    ],
+)
+def test_interpolate_custom_prefix_forms(
+    monkeypatch: pytest.MonkeyPatch,
+    placeholder: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("MY_VAR", "actual")
+    monkeypatch.delenv("MISSING_VAR", raising=False)
+
+    assert ComposeTemplate("%").interpolate(placeholder) == expected
+
+
+def test_interpolate_custom_prefix_leaves_other_syntax_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAR", "value")
+    template = "$${VAR} ${VAR} $VAR ${{environment.VAR}}"
+
+    assert ComposeTemplate("%").interpolate(template) == template
+
+
+def test_interpolate_treats_regex_metacharacter_prefix_literally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAR", "value")
+
+    assert ComposeTemplate(".+").interpolate(".+{VAR} %{VAR}") == "value %{VAR}"
+
+
+def test_interpolate_custom_prefix_error_uses_configured_syntax(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_VAR", raising=False)
+
+    with pytest.raises(TemplateError) as exc_info:
+        ComposeTemplate("%").interpolate("%{MISSING_VAR}")
+
+    assert str(exc_info.value) == ("template references %{MISSING_VAR} but MISSING_VAR is not set")
 
 
 def test_load_reads_stdin(

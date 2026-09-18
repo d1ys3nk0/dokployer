@@ -128,6 +128,23 @@ def test_main_parses_wait_timeout(
     assert mock_deployer.deploy.call_args.kwargs["wait"] == 300
 
 
+def test_main_passes_interpolation_prefix_to_template(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_deployer: MagicMock,
+) -> None:
+    monkeypatch.setenv("DOKPLOYER_INTERPOLATION_PREFIX", "%")
+    template_factory = MagicMock()
+
+    with (
+        patch.object(cli_mod, "ComposeTemplate", template_factory),
+        patch.object(cli_mod, "StackDeployer", return_value=mock_deployer),
+    ):
+        exit_code = cli_mod.main(["deploy", "app-name"])
+
+    assert exit_code == 0
+    template_factory.assert_called_once_with("%")
+
+
 def test_main_parses_inspect_containers_command(capsys: pytest.CaptureFixture[str]) -> None:
     inspector = MagicMock(spec=DokployInspector)
     inspector.containers.return_value = [{"name": "app_api.1.abc", "state": "running"}]

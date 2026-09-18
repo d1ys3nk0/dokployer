@@ -1,4 +1,4 @@
-"""Compose/env template loading and `$${VAR}` interpolation."""
+"""Compose/env template loading and environment interpolation."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import re
 import sys
 from typing import TYPE_CHECKING
 
+from dokployer.constants import DEFAULT_INTERPOLATION_PREFIX
 from dokployer.errors import TemplateError
 
 if TYPE_CHECKING:
@@ -18,12 +19,20 @@ logger = logging.getLogger(__name__)
 
 
 class ComposeTemplate:
-    """Load stack YAML from file or stdin and expand `$${VAR}` placeholders."""
+    """Load stack YAML from file or stdin and expand prefixed placeholders."""
 
-    _VAR_PATTERN = re.compile(r"\$\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?}")
+    def __init__(
+        self,
+        interpolation_prefix: str = DEFAULT_INTERPOLATION_PREFIX,
+    ) -> None:
+        """Configure the literal prefix used to recognize placeholders."""
+        self._interpolation_prefix = interpolation_prefix
+        self._var_pattern = re.compile(
+            rf"{re.escape(interpolation_prefix)}\{{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}}]*))?}}"
+        )
 
     def interpolate(self, template: str) -> str:
-        """Expand `$${VAR}` placeholders while leaving Dokploy and Compose syntax intact."""
+        """Expand configured placeholders while leaving other syntax intact."""
 
         def _replace(match: re.Match[str]) -> str:
             name = match.group(1)
@@ -33,12 +42,13 @@ class ComposeTemplate:
                 return value
             if default is not None:
                 return default
-            msg = f"template references $${{{name}}} but {name} is not set"
+            placeholder = f"{self._interpolation_prefix}{{{name}}}"
+            msg = f"template references {placeholder} but {name} is not set"
             raise TemplateError(
                 msg,
             )
 
-        return self._VAR_PATTERN.sub(_replace, template)
+        return self._var_pattern.sub(_replace, template)
 
     def load(self, template_path: Path | None) -> str:
         """Return stack YAML from ``template_path`` or stdin when ``None``."""

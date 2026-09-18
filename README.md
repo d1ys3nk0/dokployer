@@ -9,7 +9,7 @@ Dokploy.
 ## Features
 
 - Deploy raw Docker Swarm stack YAML to Dokploy compose stacks.
-- Expand only `$${VAR}` placeholders from the current process environment.
+- Expand placeholders from the current process environment using a configurable prefix that defaults to `$$`.
 - Preserve Dokploy `${{...}}`, Docker Compose `${...}`, and shell `$VAR`
   placeholders unchanged.
 - Optionally upload a Dokploy env file together with the stack.
@@ -37,6 +37,8 @@ App targeting:
 
 Optional runtime variables:
 
+- `DOKPLOYER_INTERPOLATION_PREFIX`
+  - Prefix used for environment placeholders. Default: `$$`; any non-empty literal string is accepted.
 - `DEPLOY_POLL_INTERVAL`
   - Polling interval in seconds for Dokploy deploy status. Default: `5`.
 - `DEPLOY_POLL_TIMEOUT`
@@ -71,6 +73,8 @@ Services used with `--wait` must define `image`; `deploy.mode: global` is not su
   - empty string when `VAR` is missing
 - `$${VAR:-default}`
   - uses `default` when `VAR` is missing
+
+Set `DOKPLOYER_INTERPOLATION_PREFIX` to use another literal prefix. For example, with `DOKPLOYER_INTERPOLATION_PREFIX=%`, the equivalent forms are `%{VAR}`, `%{VAR:-}`, and `%{VAR:-default}`. A prefix containing regular-expression characters is treated literally.
 
 Everything else is left unchanged:
 
@@ -137,6 +141,7 @@ docker run --rm -i \
   -e DOKPLOY_API_KEY \
   -e DOKPLOY_ENV_ID \
   -e DOKPLOY_APP_NAME \
+  -e DOKPLOYER_INTERPOLATION_PREFIX \
   -e SERVICE_IMAGE \
   -v "$PWD:$PWD" \
   -w "$PWD" \
@@ -147,8 +152,7 @@ docker run --rm -i \
 Important:
 
 - `--env path/to/dotenv` is the Dokploy env file uploaded by `dokployer`.
-- `-e DOKPLOY_*` and other `docker run -e ...` values are container process
-  environment variables used for authentication and `$${VAR}` interpolation.
+- `-e DOKPLOY_*`, `-e DOKPLOYER_INTERPOLATION_PREFIX`, and other `docker run -e ...` values are container process environment variables used for authentication and interpolation.
 
 ## GitLab CI Usage
 

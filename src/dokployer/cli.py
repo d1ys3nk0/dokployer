@@ -176,7 +176,7 @@ def _print_text(data: object) -> None:
 
 def _run_deploy(args: argparse.Namespace) -> None:
     config = resolve_config()
-    template = ComposeTemplate()
+    template = ComposeTemplate(config.interpolation_prefix)
     client = DokployClient(config)
     deployer = StackDeployer(client, template, config)
     deployer.deploy(
