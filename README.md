@@ -127,10 +127,12 @@ Inspection commands only use the Dokploy API. They do not use SSH, Docker CLI, o
 
 ## Docker Usage
 
-The GitHub workflow publishes:
+Pushing a release tag in the strict `vMAJOR.MINOR.PATCH` format, such as `v1.2.3`, publishes:
 
+- `ghcr.io/d1ys3nk0/dokployer:v1.2.3`
 - `ghcr.io/d1ys3nk0/dokployer:latest`
-- `ghcr.io/d1ys3nk0/dokployer:<short-sha>`
+
+Both image tags refer to the same multi-platform build. Each successful release replaces the mutable `latest` tag, while its versioned tag remains fixed.
 
 When using `docker run`, mount the directory that contains the stack and env
 files so the paths exist inside the container:

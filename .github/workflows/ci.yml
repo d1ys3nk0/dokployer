@@ -4,26 +4,25 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      - "**"
+    tags:
+      - "v*"
 
 env:
   REGISTRY: ghcr.io
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  checks:
+  verify_lint:
+    name: verify:lint
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-        os: [ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.14"
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -39,28 +38,53 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check (mypy)
-        run: cd src && uv run mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+        run: cd src && uv run python -m mypy dokployer --config-file ../mypy.ini --explicit-package-bases
+
+  verify_test:
+    name: verify:test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
 
       - name: Tests
-        run: uv run pytest --cov=src --cov-fail-under=90
-
-      - name: Build package
-        run: uv build
+        run: uv run python -m pytest --cov=src --cov-fail-under=90
 
   docker:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: checks
+    name: build:docker
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs:
+      - verify_lint
+      - verify_test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: ${GITHUB_REF_NAME}. Expected vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
 
-      - name: Compute short SHA
-        id: vars
-        run: echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
 
       - uses: docker/setup-qemu-action@v3
 
@@ -78,7 +102,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name }}
             ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ steps.vars.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
