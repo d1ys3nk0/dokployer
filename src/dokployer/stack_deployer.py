@@ -86,6 +86,7 @@ class ContainerDiagnostic:
     inspect_error: str | None
     ready: bool
     exit_code: int | None = None
+    error: str | None = None
 
 
 class StackDeployer:
@@ -481,6 +482,7 @@ class StackDeployer:
                 inspect_error="missing container id",
                 ready=False,
                 exit_code=self._container_exit_code({}, container),
+                error=self._container_error({}, container),
             )
 
         try:
@@ -503,6 +505,7 @@ class StackDeployer:
                 inspect_error=f"inspect failed: {exc}",
                 ready=False,
                 exit_code=self._container_exit_code({}, container),
+                error=self._container_error({}, container),
             )
 
         state = self._container_state(config, container)
@@ -532,6 +535,7 @@ class StackDeployer:
             inspect_error=None,
             ready=ready,
             exit_code=exit_code,
+            error=self._container_error(config, container),
         )
 
     def _container_readiness_report(self, diagnostic: ContainerDiagnostic) -> str:
@@ -543,6 +547,8 @@ class StackDeployer:
         ]
         if diagnostic.exit_code is not None:
             parts.append(f"exit={diagnostic.exit_code}")
+        if diagnostic.error is not None:
+            parts.append(f"error={diagnostic.error}")
         if diagnostic.inspect_error is not None:
             parts.append(diagnostic.inspect_error)
         return " ".join(parts)
@@ -560,6 +566,7 @@ class StackDeployer:
             lines.append(f"    image: {diagnostic.image or 'unknown'}")
             lines.append(f"    state: {diagnostic.state or 'unknown'}")
             lines.extend(_exit_code_summary_lines(diagnostic.exit_code))
+            lines.extend(_error_summary_lines(diagnostic.error))
             if diagnostic.started_at is not None:
                 lines.append(f"    started: {diagnostic.started_at}")
             if diagnostic.stopped_at is not None:
@@ -675,6 +682,27 @@ class StackDeployer:
             exit_code = _exit_code_from(source, keys)
             if exit_code is not None:
                 return exit_code
+        return None
+
+    def _container_error(
+        self,
+        config: dict[str, object],
+        container: dict[str, object] | None = None,
+    ) -> str | None:
+        raw_status = config.get("Status")
+        sources = (
+            (raw_status, ("Err", "Error")),
+            (config.get("State"), ("Error", "Err")),
+            (config, ("error", "err", "statusErr")),
+            (container, ("error", "err", "statusErr")),
+        )
+        for source, keys in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
         return None
 
     def _container_created_at(
@@ -1134,6 +1162,12 @@ def _exit_code_summary_lines(exit_code: int | None) -> list[str]:
     if exit_code is None:
         return []
     return [f"    exit code: {exit_code}"]
+
+
+def _error_summary_lines(error: str | None) -> list[str]:
+    if error is None:
+        return []
+    return [f"    error: {error}"]
 
 
 def _container_sort_key(diagnostic: ContainerDiagnostic) -> tuple[bool, str, str, str]:

@@ -1508,6 +1508,37 @@ services:
         assert deployer._container_started_at(shutdown_task) is None
         assert deployer._container_stopped_at(shutdown_task) == "2026-05-05T11:30:00Z"
 
+    def test_containers_ready_reports_swarm_task_rejection_error(self) -> None:
+        client = MagicMock()
+        client.get_container_config.return_value = {
+            "Status": {
+                "State": "rejected",
+                "Err": ("manifest for temporalio/auto-setup:1.32.0 not found: manifest unknown"),
+                "ContainerStatus": {"ExitCode": 0},
+            },
+            "Spec": {"ContainerSpec": {"Image": "temporalio/auto-setup:1.32.0"}},
+        }
+        deployer = StackDeployer(
+            client,
+            ComposeTemplate(),
+            resolve_config({"DOKPLOY_URL": "http://localhost", "DOKPLOY_API_KEY": "key"}),
+        )
+
+        ready, report, summary = deployer._containers_ready(
+            [{"name": "stack_server.1.abc", "containerId": "task-1"}],
+            [
+                ExpectedService(
+                    name="server",
+                    image="temporalio/auto-setup:1.32.0",
+                    replicas=1,
+                )
+            ],
+        )
+
+        assert ready is False
+        assert "error=manifest for temporalio/auto-setup:1.32.0 not found" in report
+        assert "error: manifest for temporalio/auto-setup:1.32.0 not found" in summary
+
     def test_deploy_failure_appends_best_effort_container_summary(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
