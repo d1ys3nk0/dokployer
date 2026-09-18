@@ -593,7 +593,14 @@ class StackDeployer:
             return state == "complete" or (state == "exited" and exit_code == 0)
         if state != "running":
             return False
-        return health == "healthy" if has_healthcheck else health in {None, "healthy"}
+        # Docker exposes ``State.Health`` while a healthcheck is running. Dokploy's
+        # Swarm inspection response can omit that runtime field altogether, even
+        # when the task is running and the stack declares a healthcheck. In that
+        # case there is no unhealthy or starting state to reject, so use the
+        # running task as the strongest status the API makes available.
+        if has_healthcheck and health is not None:
+            return health == "healthy"
+        return True
 
     def _container_has_healthcheck(self, config: dict[str, object]) -> bool:
         raw_config = config.get("Config")

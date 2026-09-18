@@ -1587,7 +1587,7 @@ services:
         assert ready is False
         assert "health=starting" in report
 
-    def test_stack_healthcheck_requires_inspect_health_state(
+    def test_stack_healthcheck_allows_running_container_when_inspect_omits_health_state(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1614,8 +1614,8 @@ services:
         )
 
         assert expected[0].healthcheck is True
-        assert ready is False
-        assert "health=n/a" in report
+        assert ready is True
+        assert report == "all expected containers are ready"
 
     def test_readiness_excludes_containers_started_before_deployment(self) -> None:
         client = MagicMock()
