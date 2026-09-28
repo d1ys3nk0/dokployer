@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -214,6 +215,14 @@ class StackDeployer:
             image = raw_service.get("image")
             if not isinstance(image, str) or not image:
                 msg = f"stack service must define image for readiness checks: {raw_name}"
+                raise ConfigurationError(msg)
+            unresolved = re.search(r"\$\{(?!\{)[^{}]+}", image)
+            if unresolved is not None:
+                msg = (
+                    f"stack service image contains an unresolved Compose variable: "
+                    f"{raw_name} ({unresolved.group()}); use the Dokployer interpolation prefix "
+                    "or a literal image for readiness checks"
+                )
                 raise ConfigurationError(msg)
 
             raw_deploy = raw_service.get("deploy")
@@ -1000,7 +1009,11 @@ class StackDeployer:
 
         try:
             app_name = self._compose_app_name(stack_name, compose_id)
-            containers = self._client.get_stack_containers_by_app_name(app_name)
+            tasks = self._client.get_stack_containers_by_app_name(app_name)
+            containers = self._diagnostic_containers(
+                tasks,
+                self._client.get_containers_by_app_name_match(app_name),
+            )
             expected_by_name = {service.name: service for service in expected_services}
             if expected_by_name:
                 diagnostics = self._container_diagnostics(
@@ -1010,7 +1023,6 @@ class StackDeployer:
                 )
             else:
                 diagnostics = self._diagnostics_for_all_containers(containers)
-            diagnostics = self._prefer_current_attempt(diagnostics, attempt.started_at)
             summary = self._container_summary(diagnostics)
         except (ConfigurationError, DokployAPIError) as exc:
             summary = f"Container summary:\n  unavailable: {exc}"
@@ -1018,6 +1030,38 @@ class StackDeployer:
         sections.append(summary)
         sections.append(self._compose_log_diagnostics(compose_id, diagnostics, tail))
         return "\n".join(sections)
+
+    def _diagnostic_containers(
+        self,
+        tasks: list[object],
+        docker_containers: list[object],
+    ) -> list[object]:
+        """Join task history to real Docker IDs without inspecting task IDs as containers."""
+        by_name = {
+            item["name"].lstrip("/"): item
+            for item in docker_containers
+            if isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and isinstance(item.get("containerId"), str)
+            and item["containerId"]
+        }
+        resolved: list[object] = []
+        matched: set[str] = set()
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            name = task.get("name")
+            if not isinstance(name, str):
+                continue
+            real = by_name.get(name.lstrip("/"))
+            merged = {**task, "containerId": None}
+            if real is not None:
+                merged.update(real)
+                merged["name"] = name.lstrip("/")
+                matched.add(name.lstrip("/"))
+            resolved.append(merged)
+        resolved.extend(item for name, item in by_name.items() if name not in matched)
+        return resolved
 
     def _deployment_log_diagnostic(
         self,

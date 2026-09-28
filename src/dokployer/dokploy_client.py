@@ -224,6 +224,16 @@ class DokployClient:
         )
         return data if isinstance(data, list) else []
 
+    def get_containers_by_app_name_match(self, app_name: str) -> list[object]:
+        """Fetch real Docker containers for a stack app name."""
+        query = urllib.parse.urlencode({"appType": "stack", "appName": app_name})
+        data = self._request_json(
+            "GET",
+            f"/api/docker.getContainersByAppNameMatch?{query}",
+            retry_get=True,
+        )
+        return data if isinstance(data, list) else []
+
     def get_deployments_by_compose(self, compose_id: str) -> list[object]:
         """Fetch deployments for a compose app."""
         input_json = json.dumps({"json": {"composeId": compose_id}}, separators=(",", ":"))

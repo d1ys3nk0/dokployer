@@ -298,6 +298,22 @@ class TestDokployClientTransport:
         )
         assert result == [{"name": "app_api.1.abc", "state": "running"}]
 
+    def test_get_containers_by_app_name_match_returns_real_container_ids(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://test.local")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        mock_response = MockResponse(b'[{"name":"stack_app.1.abc","containerId":"docker-1"}]')
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=mock_response))
+
+        result = _client().get_containers_by_app_name_match("my app")
+
+        request = urllib.request.urlopen.call_args[0][0]
+        assert request.full_url == (
+            "http://test.local/api/docker.getContainersByAppNameMatch?appType=stack&appName=my+app"
+        )
+        assert result == [{"name": "stack_app.1.abc", "containerId": "docker-1"}]
+
     def test_get_deployments_by_compose_returns_trpc_json(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

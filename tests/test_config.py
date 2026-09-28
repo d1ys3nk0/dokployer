@@ -23,7 +23,7 @@ def test_resolve_config_reads_canonical_values() -> None:
     assert config.environment_id == "env-new"
     assert config.app_name == "app-new"
     assert config.app_id == "cmp-new"
-    assert config.interpolation_prefix == "$$"
+    assert config.interpolation_prefix == "$%"
 
 
 def test_resolve_config_reads_custom_interpolation_prefix() -> None:

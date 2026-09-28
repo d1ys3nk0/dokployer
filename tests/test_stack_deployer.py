@@ -172,7 +172,7 @@ class TestStackDeployerWorkflow:
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text(
-            "version: '3'\nservices:\n  app:\n    image: $${MY_VAR}\n",
+            "version: '3'\nservices:\n  app:\n    image: $%{MY_VAR}\n",
             encoding="utf-8",
         )
 
@@ -203,7 +203,7 @@ class TestStackDeployerWorkflow:
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text(
-            "version: '3'\nservices:\n  app:\n    image: $${MY_VAR}\n",
+            "version: '3'\nservices:\n  app:\n    image: $%{MY_VAR}\n",
             encoding="utf-8",
         )
 
@@ -313,7 +313,7 @@ class TestStackDeployerWorkflow:
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text(
-            "version: '3'\nservices:\n  app:\n    image: $${MY_VAR}\n",
+            "version: '3'\nservices:\n  app:\n    image: $%{MY_VAR}\n",
             encoding="utf-8",
         )
 
@@ -341,7 +341,7 @@ class TestStackDeployerWorkflow:
 
         compose_tmpl = tmp_path / "stack.yml"
         compose_tmpl.write_text(
-            "version: '3'\nservices:\n  app:\n    image: $${DEPLOY_IMAGE}\n",
+            "version: '3'\nservices:\n  app:\n    image: $%{DEPLOY_IMAGE}\n",
             encoding="utf-8",
         )
 
@@ -1409,6 +1409,51 @@ services:
             with pytest.raises(ConfigurationError):
                 deployer._parse_expected_services(stack)
 
+    @pytest.mark.parametrize(
+        "image", ["example/app:${IMAGE_TAG}", "example/app:${IMAGE_TAG-default}"]
+    )
+    def test_wait_rejects_unresolved_compose_image_before_remote_calls(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, image: str
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        path = tmp_path / "stack.yml"
+        path.write_text(f"services:\n  app:\n    image: {image}\n")
+        client = MagicMock(spec=DokployClient)
+
+        with pytest.raises(ConfigurationError, match=r"app \(\$\{IMAGE_TAG"):
+            _deployer(client, ComposeTemplate()).deploy("my-stack", template_path=path, wait=60)
+
+        client.get_environment.assert_not_called()
+        client.update_compose.assert_not_called()
+
+    def test_failure_diagnostics_resolve_real_ids_and_skip_historical_tasks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DOKPLOY_URL", "http://localhost")
+        monkeypatch.setenv("DOKPLOY_API_KEY", "key")
+        client = MagicMock(spec=DokployClient)
+        client.get_container_config.return_value = {}
+        client.read_compose_logs.return_value = ""
+        deployer = _deployer(client, ComposeTemplate())
+        tasks = [
+            {"name": "stack_app.1.old", "containerId": "task-old", "state": "failed"},
+            {"name": "stack_app.1.current", "containerId": "task-current", "state": "running"},
+        ]
+        containers = [
+            {"name": "stack_app.1.current", "containerId": "docker-current", "state": "running"}
+        ]
+
+        merged = deployer._diagnostic_containers(tasks, containers)
+        diagnostics = deployer._diagnostics_for_all_containers(merged)
+        report = deployer._compose_log_diagnostics("compose-1", diagnostics, 10)
+
+        assert [item.container_id for item in diagnostics] == [None, "docker-current"]
+        client.get_container_config.assert_called_once_with("docker-current")
+        client.read_compose_logs.assert_called_once_with("compose-1", "docker-current", 10)
+        assert "task-old" not in report
+        assert "task-current" not in report
+
     def test_parse_expected_services_marks_restart_policy_none_as_completed(self) -> None:
         client = MagicMock()
         template = ComposeTemplate()
@@ -1569,6 +1614,9 @@ services:
         client.get_deployments_by_compose.side_effect = [[], [deployment], [deployment]]
         client.get_compose.return_value = {"composeId": "cmp-001", "name": "my-stack"}
         client.get_stack_containers_by_app_name.return_value = [
+            {"containerId": "ctr-1", "name": "my-stack_app.1.abc"}
+        ]
+        client.get_containers_by_app_name_match.return_value = [
             {"containerId": "ctr-1", "name": "my-stack_app.1.abc"}
         ]
         client.get_container_config.return_value = {
@@ -1751,6 +1799,9 @@ services:
             "inspect unavailable",
             status_code=502,
         )
+        client.get_containers_by_app_name_match.return_value = [
+            {"name": "my-stack_app.1.abc", "containerId": "ctr-1"}
+        ]
         client.read_deployment_logs.return_value = "deployment output"
         client.read_compose_logs.return_value = "container output"
 

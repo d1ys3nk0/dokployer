@@ -24,11 +24,11 @@ class _FakeStdin(io.StringIO):
         return self._is_tty
 
 
-def test_interpolate_replaces_dollar_dollar_var(
+def test_interpolate_replaces_default_prefix_var(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MY_VAR", "hello")
-    assert ComposeTemplate().interpolate("prefix $${MY_VAR} suffix") == "prefix hello suffix"
+    assert ComposeTemplate().interpolate("prefix $%{MY_VAR} suffix") == "prefix hello suffix"
 
 
 def test_interpolate_leaves_dokploy_double_brace_with_dot() -> None:
@@ -56,26 +56,26 @@ def test_interpolate_no_vars_returns_unchanged() -> None:
 def test_interpolate_raises_on_missing_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MISSING_VAR", raising=False)
     with pytest.raises(TemplateError) as exc_info:
-        ComposeTemplate().interpolate("$${MISSING_VAR}")
+        ComposeTemplate().interpolate("$%{MISSING_VAR}")
 
-    assert str(exc_info.value) == ("template references $${MISSING_VAR} but MISSING_VAR is not set")
+    assert str(exc_info.value) == ("template references $%{MISSING_VAR} but MISSING_VAR is not set")
 
 
 def test_interpolate_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MISSING_VAR", raising=False)
-    assert ComposeTemplate().interpolate("$${MISSING_VAR:-}") == ""
+    assert ComposeTemplate().interpolate("$%{MISSING_VAR:-}") == ""
 
 
 def test_interpolate_default_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MISSING_VAR", raising=False)
-    assert ComposeTemplate().interpolate("$${MISSING_VAR:-fallback}") == "fallback"
+    assert ComposeTemplate().interpolate("$%{MISSING_VAR:-fallback}") == "fallback"
 
 
 def test_interpolate_set_var_ignores_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MY_VAR", "actual")
-    assert ComposeTemplate().interpolate("$${MY_VAR:-fallback}") == "actual"
+    assert ComposeTemplate().interpolate("$%{MY_VAR:-fallback}") == "actual"
 
 
 @pytest.mark.parametrize(
